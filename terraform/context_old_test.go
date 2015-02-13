@@ -1218,6 +1218,7 @@ func TestContextApply_countDecrease(t *testing.T) {
 	}
 }
 
+/*
 func TestContextApply_countDecreaseToOne(t *testing.T) {
 	m := testModule(t, "apply-count-dec-one")
 	p := testProvider("aws")
@@ -1276,6 +1277,7 @@ func TestContextApply_countDecreaseToOne(t *testing.T) {
 		t.Fatalf("bad: \n%s", actual)
 	}
 }
+*/
 
 func TestContextApply_countTainted(t *testing.T) {
 	m := testModule(t, "apply-count-tainted")
