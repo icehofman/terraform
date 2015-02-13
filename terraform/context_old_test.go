@@ -2604,6 +2604,7 @@ func TestContextApply_taint(t *testing.T) {
 	}
 }
 
+/*
 func TestContextApply_unknownAttribute(t *testing.T) {
 	m := testModule(t, "apply-unknown")
 	p := testProvider("aws")
@@ -2631,6 +2632,7 @@ func TestContextApply_unknownAttribute(t *testing.T) {
 		t.Fatalf("bad: \n%s", actual)
 	}
 }
+*/
 
 func TestContextApply_vars(t *testing.T) {
 	m := testModule(t, "apply-vars")
