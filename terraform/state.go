@@ -368,6 +368,7 @@ func (m *ModuleState) deepcopy() *ModuleState {
 func (m *ModuleState) prune() {
 	for k, v := range m.Resources {
 		v.prune()
+
 		if (v.Primary == nil || v.Primary.ID == "") && len(v.Tainted) == 0 {
 			delete(m.Resources, k)
 		}
@@ -543,8 +544,10 @@ func (r *ResourceState) prune() {
 			copy(r.Tainted[i:], r.Tainted[i+1:])
 			r.Tainted[n-1] = nil
 			n--
+			i--
 		}
 	}
+
 	r.Tainted = r.Tainted[:n]
 }
 
