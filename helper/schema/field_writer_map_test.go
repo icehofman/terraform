@@ -22,6 +22,19 @@ func TestMapFieldWriter(t *testing.T) {
 			Type: TypeList,
 			Elem: &Schema{Type: TypeInt},
 		},
+		"listResource": &Schema{
+			Type:     TypeList,
+			Optional: true,
+			Computed: true,
+			Elem: &Resource{
+				Schema: map[string]*Schema{
+					"value": &Schema{
+						Type:     TypeInt,
+						Optional: true,
+					},
+				},
+			},
+		},
 		"map": &Schema{Type: TypeMap},
 		"set": &Schema{
 			Type: TypeSet,
@@ -84,6 +97,47 @@ func TestMapFieldWriter(t *testing.T) {
 			},
 		},
 
+		"string nil": {
+			[]string{"string"},
+			nil,
+			false,
+			map[string]string{
+				"string": "",
+			},
+		},
+
+		"list of resources": {
+			[]string{"listResource"},
+			[]interface{}{
+				map[string]interface{}{
+					"value": 80,
+				},
+			},
+			false,
+			map[string]string{
+				"listResource.#":       "1",
+				"listResource.0.value": "80",
+			},
+		},
+
+		"list of resources empty": {
+			[]string{"listResource"},
+			[]interface{}{},
+			false,
+			map[string]string{
+				"listResource.#": "0",
+			},
+		},
+
+		"list of resources nil": {
+			[]string{"listResource"},
+			nil,
+			false,
+			map[string]string{
+				"listResource.#": "0",
+			},
+		},
+
 		"list of strings": {
 			[]string{"list"},
 			[]interface{}{"foo", "bar"},
@@ -107,7 +161,7 @@ func TestMapFieldWriter(t *testing.T) {
 			map[string]interface{}{"foo": "bar"},
 			false,
 			map[string]string{
-				"map.#":   "1",
+				"map.%":   "1",
 				"map.foo": "bar",
 			},
 		},
@@ -197,7 +251,7 @@ func TestMapFieldWriter(t *testing.T) {
 	for name, tc := range cases {
 		w := &MapFieldWriter{Schema: schema}
 		err := w.WriteField(tc.Addr, tc.Value)
-		if (err != nil) != tc.Err {
+		if err != nil != tc.Err {
 			t.Fatalf("%s: err: %s", name, err)
 		}
 

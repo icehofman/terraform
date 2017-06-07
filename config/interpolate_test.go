@@ -2,9 +2,10 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
-	"github.com/hashicorp/terraform/config/lang"
+	"github.com/hashicorp/hil"
 )
 
 func TestNewInterpolatedVariable(t *testing.T) {
@@ -54,11 +55,27 @@ func TestNewInterpolatedVariable(t *testing.T) {
 			},
 			false,
 		},
+		{
+			"self.address",
+			&SelfVariable{
+				Field: "address",
+				key:   "self.address",
+			},
+			false,
+		},
+		{
+			"terraform.env",
+			&TerraformVariable{
+				Field: "env",
+				key:   "terraform.env",
+			},
+			false,
+		},
 	}
 
 	for i, tc := range cases {
 		actual, err := NewInterpolatedVariable(tc.Input)
-		if (err != nil) != tc.Error {
+		if err != nil != tc.Error {
 			t.Fatalf("%d. Error: %s", i, err)
 		}
 		if !reflect.DeepEqual(actual, tc.Result) {
@@ -73,6 +90,9 @@ func TestNewResourceVariable(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 
+	if v.Mode != ManagedResourceMode {
+		t.Fatalf("bad: %#v", v)
+	}
 	if v.Type != "foo" {
 		t.Fatalf("bad: %#v", v)
 	}
@@ -91,6 +111,33 @@ func TestNewResourceVariable(t *testing.T) {
 	}
 }
 
+func TestNewResourceVariableData(t *testing.T) {
+	v, err := NewResourceVariable("data.foo.bar.baz")
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	if v.Mode != DataResourceMode {
+		t.Fatalf("bad: %#v", v)
+	}
+	if v.Type != "foo" {
+		t.Fatalf("bad: %#v", v)
+	}
+	if v.Name != "bar" {
+		t.Fatalf("bad: %#v", v)
+	}
+	if v.Field != "baz" {
+		t.Fatalf("bad: %#v", v)
+	}
+	if v.Multi {
+		t.Fatal("should not be multi")
+	}
+
+	if v.FullKey() != "data.foo.bar.baz" {
+		t.Fatalf("bad: %#v", v)
+	}
+}
+
 func TestNewUserVariable(t *testing.T) {
 	v, err := NewUserVariable("var.bar")
 	if err != nil {
@@ -105,20 +152,10 @@ func TestNewUserVariable(t *testing.T) {
 	}
 }
 
-func TestNewUserVariable_map(t *testing.T) {
-	v, err := NewUserVariable("var.bar.baz")
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	if v.Name != "bar" {
-		t.Fatalf("bad: %#v", v.Name)
-	}
-	if v.Elem != "baz" {
-		t.Fatalf("bad: %#v", v.Elem)
-	}
-	if v.FullKey() != "var.bar.baz" {
-		t.Fatalf("bad: %#v", v)
+func TestNewUserVariable_oldMapDotIndexErr(t *testing.T) {
+	_, err := NewUserVariable("var.bar.baz")
+	if err == nil || !strings.Contains(err.Error(), "Invalid dot index") {
+		t.Fatalf("Expected dot index err, got: %#v", err)
 	}
 }
 
@@ -211,10 +248,26 @@ func TestDetectVariables(t *testing.T) {
 				},
 			},
 		},
+
+		{
+			`foo ${module.foo.output["key"]}`,
+			[]InterpolatedVariable{
+				&ModuleVariable{
+					Name:  "foo",
+					Field: "output",
+					key:   "module.foo.output",
+				},
+				&ModuleVariable{
+					Name:  "foo",
+					Field: "output",
+					key:   "module.foo.output",
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {
-		ast, err := lang.Parse(tc.Input)
+		ast, err := hil.Parse(tc.Input)
 		if err != nil {
 			t.Fatalf("%s\n\nInput: %s", err, tc.Input)
 		}

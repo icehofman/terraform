@@ -39,13 +39,7 @@ func (r *DiffFieldReader) ReadField(address []string) (FieldReadResult, error) {
 
 	schema := schemaList[len(schemaList)-1]
 	switch schema.Type {
-	case TypeBool:
-		fallthrough
-	case TypeInt:
-		fallthrough
-	case TypeFloat:
-		fallthrough
-	case TypeString:
+	case TypeBool, TypeInt, TypeFloat, TypeString:
 		return r.readPrimitive(address, schema)
 	case TypeList:
 		return readListField(r, address, schema)
@@ -82,7 +76,7 @@ func (r *DiffFieldReader) readMap(
 		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
-		if strings.HasPrefix(k, prefix+"#") {
+		if strings.HasPrefix(k, prefix+"%") {
 			// Ignore the count field
 			continue
 		}
@@ -96,6 +90,11 @@ func (r *DiffFieldReader) readMap(
 		}
 
 		result[k] = v.New
+	}
+
+	err = mapValuesToPrimitive(result, schema)
+	if err != nil {
+		return FieldReadResult{}, nil
 	}
 
 	var resultVal interface{}
@@ -144,12 +143,17 @@ func (r *DiffFieldReader) readPrimitive(
 
 func (r *DiffFieldReader) readSet(
 	address []string, schema *Schema) (FieldReadResult, error) {
+	prefix := strings.Join(address, ".") + "."
+
 	// Create the set that will be our result
-	set := &Set{F: schema.Set}
+	set := schema.ZeroValue().(*Set)
 
 	// Go through the map and find all the set items
-	prefix := strings.Join(address, ".") + "."
-	for k, _ := range r.Diff.Attributes {
+	for k, d := range r.Diff.Attributes {
+		if d.NewRemoved {
+			// If the field is removed, we always ignore it
+			continue
+		}
 		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
@@ -174,8 +178,31 @@ func (r *DiffFieldReader) readSet(
 		set.Add(raw.Value)
 	}
 
+	// Determine if the set "exists". It exists if there are items or if
+	// the diff explicitly wanted it empty.
+	exists := set.Len() > 0
+	if !exists {
+		// We could check if the diff value is "0" here but I think the
+		// existence of "#" on its own is enough to show it existed. This
+		// protects us in the future from the zero value changing from
+		// "0" to "" breaking us (if that were to happen).
+		if _, ok := r.Diff.Attributes[prefix+"#"]; ok {
+			exists = true
+		}
+	}
+
+	if !exists {
+		result, err := r.Source.ReadField(address)
+		if err != nil {
+			return FieldReadResult{}, err
+		}
+		if result.Exists {
+			return result, nil
+		}
+	}
+
 	return FieldReadResult{
 		Value:  set,
-		Exists: set.Len() > 0,
+		Exists: exists,
 	}, nil
 }

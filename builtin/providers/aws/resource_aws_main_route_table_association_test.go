@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
 )
 
-func TestAccAWSMainRouteTableAssociation(t *testing.T) {
+func TestAccAWSMainRouteTableAssociation_basic(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -39,8 +40,28 @@ func TestAccAWSMainRouteTableAssociation(t *testing.T) {
 }
 
 func testAccCheckMainRouteTableAssociationDestroy(s *terraform.State) error {
-	if len(s.RootModule().Resources) > 0 {
-		return fmt.Errorf("Expected all resources to be gone, but found: %#v", s.RootModule().Resources)
+	conn := testAccProvider.Meta().(*AWSClient).ec2conn
+
+	for _, rs := range s.RootModule().Resources {
+		if rs.Type != "aws_main_route_table_association" {
+			continue
+		}
+
+		mainAssociation, err := findMainRouteTableAssociation(
+			conn,
+			rs.Primary.Attributes["vpc_id"],
+		)
+		if err != nil {
+			// Verify the error is what we want
+			if ae, ok := err.(awserr.Error); ok && ae.Code() == "ApplicationDoesNotExistException" {
+				continue
+			}
+			return err
+		}
+
+		if mainAssociation != nil {
+			return fmt.Errorf("still exists")
+		}
 	}
 
 	return nil
@@ -71,9 +92,9 @@ func testAccCheckMainRouteTableAssociation(
 			return err
 		}
 
-		if mainAssociation.AssociationId != rs.Primary.ID {
+		if *mainAssociation.RouteTableAssociationId != rs.Primary.ID {
 			return fmt.Errorf("Found wrong main association: %s",
-				mainAssociation.AssociationId)
+				*mainAssociation.RouteTableAssociationId)
 		}
 
 		return nil
@@ -83,6 +104,9 @@ func testAccCheckMainRouteTableAssociation(
 const testAccMainRouteTableAssociationConfig = `
 resource "aws_vpc" "foo" {
 	cidr_block = "10.1.0.0/16"
+	tags {
+		Name = "testAccMainRouteTableAssociationConfig"
+	}
 }
 
 resource "aws_subnet" "foo" {
@@ -111,6 +135,9 @@ resource "aws_main_route_table_association" "foo" {
 const testAccMainRouteTableAssociationConfigUpdate = `
 resource "aws_vpc" "foo" {
 	cidr_block = "10.1.0.0/16"
+	tags {
+		Name = "testAccMainRouteTableAssociationConfigUpdate"
+	}
 }
 
 resource "aws_subnet" "foo" {

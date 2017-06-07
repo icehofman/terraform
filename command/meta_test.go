@@ -1,13 +1,14 @@
 package command
 
 import (
+	"flag"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
-	"github.com/hashicorp/terraform/remote"
+	"github.com/hashicorp/terraform/backend"
 	"github.com/hashicorp/terraform/terraform"
 )
 
@@ -66,8 +67,42 @@ func TestMetaInputMode(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 
-	if m.InputMode() != terraform.InputModeStd {
+	if m.InputMode() != terraform.InputModeStd|terraform.InputModeVarUnset {
 		t.Fatalf("bad: %#v", m.InputMode())
+	}
+}
+
+func TestMetaInputMode_envVar(t *testing.T) {
+	test = false
+	defer func() { test = true }()
+	old := os.Getenv(InputModeEnvVar)
+	defer os.Setenv(InputModeEnvVar, old)
+
+	m := new(Meta)
+	args := []string{}
+
+	fs := m.flagSet("foo")
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	off := terraform.InputMode(0)
+	on := terraform.InputModeStd | terraform.InputModeVarUnset
+	cases := []struct {
+		EnvVar   string
+		Expected terraform.InputMode
+	}{
+		{"false", off},
+		{"0", off},
+		{"true", on},
+		{"1", on},
+	}
+
+	for _, tc := range cases {
+		os.Setenv(InputModeEnvVar, tc.EnvVar)
+		if m.InputMode() != tc.Expected {
+			t.Fatalf("expected InputMode: %#v, got: %#v", tc.Expected, m.InputMode())
+		}
 	}
 }
 
@@ -124,7 +159,7 @@ func TestMetaInputMode_defaultVars(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 
-	if m.InputMode()&terraform.InputModeVar != 0 {
+	if m.InputMode()&terraform.InputModeVar == 0 {
 		t.Fatalf("bad: %#v", m.InputMode())
 	}
 }
@@ -141,7 +176,11 @@ func TestMetaInputMode_vars(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 
-	if m.InputMode()&terraform.InputModeVar != 0 {
+	if m.InputMode()&terraform.InputModeVar == 0 {
+		t.Fatalf("bad: %#v", m.InputMode())
+	}
+
+	if m.InputMode()&terraform.InputModeVarUnset == 0 {
 		t.Fatalf("bad: %#v", m.InputMode())
 	}
 }
@@ -156,7 +195,7 @@ func TestMeta_initStatePaths(t *testing.T) {
 	if m.stateOutPath != DefaultStateFilename {
 		t.Fatalf("bad: %#v", m)
 	}
-	if m.backupPath != DefaultStateFilename+DefaultBackupExtention {
+	if m.backupPath != DefaultStateFilename+DefaultBackupExtension {
 		t.Fatalf("bad: %#v", m)
 	}
 
@@ -167,7 +206,7 @@ func TestMeta_initStatePaths(t *testing.T) {
 	if m.stateOutPath != "foo" {
 		t.Fatalf("bad: %#v", m)
 	}
-	if m.backupPath != "foo"+DefaultBackupExtention {
+	if m.backupPath != "foo"+DefaultBackupExtension {
 		t.Fatalf("bad: %#v", m)
 	}
 
@@ -178,160 +217,93 @@ func TestMeta_initStatePaths(t *testing.T) {
 	if m.statePath != DefaultStateFilename {
 		t.Fatalf("bad: %#v", m)
 	}
-	if m.backupPath != "foo"+DefaultBackupExtention {
+	if m.backupPath != "foo"+DefaultBackupExtension {
 		t.Fatalf("bad: %#v", m)
 	}
 }
 
-func TestMeta_persistLocal(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
+func TestMeta_addModuleDepthFlag(t *testing.T) {
+	old := os.Getenv(ModuleDepthEnvVar)
+	defer os.Setenv(ModuleDepthEnvVar, old)
 
-	m := new(Meta)
-	s := terraform.NewState()
-	if err := m.persistLocalState(s); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	exists, err := remote.ExistsFile(m.stateOutPath)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if !exists {
-		t.Fatalf("state should exist")
-	}
-
-	// Write again, shoudl backup
-	if err := m.persistLocalState(s); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	exists, err = remote.ExistsFile(m.backupPath)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if !exists {
-		t.Fatalf("backup should exist")
-	}
-}
-
-func TestMeta_persistRemote(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
-
-	err := remote.EnsureDirectory()
-	if err != nil {
-		t.Fatalf("err: %v", err)
+	cases := map[string]struct {
+		EnvVar   string
+		Args     []string
+		Expected int
+	}{
+		"env var sets value when no flag present": {
+			EnvVar:   "4",
+			Args:     []string{},
+			Expected: 4,
+		},
+		"flag overrides envvar": {
+			EnvVar:   "4",
+			Args:     []string{"-module-depth=-1"},
+			Expected: -1,
+		},
+		"negative envvar works": {
+			EnvVar:   "-1",
+			Args:     []string{},
+			Expected: -1,
+		},
+		"invalid envvar is ignored": {
+			EnvVar:   "-#",
+			Args:     []string{},
+			Expected: ModuleDepthDefault,
+		},
+		"empty envvar is okay too": {
+			EnvVar:   "",
+			Args:     []string{},
+			Expected: ModuleDepthDefault,
+		},
 	}
 
-	s := terraform.NewState()
-	conf, srv := testRemoteState(t, s, 200)
-	s.Remote = conf
-	defer srv.Close()
-
-	m := new(Meta)
-	if err := m.persistRemoteState(s); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	local, _, err := remote.ReadLocalState()
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if local == nil {
-		t.Fatalf("state should exist")
-	}
-
-	if err := m.persistRemoteState(s); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	backup := remote.LocalDirectory + "/" + remote.BackupHiddenStateFile
-	exists, err := remote.ExistsFile(backup)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if !exists {
-		t.Fatalf("backup should exist")
+	for tn, tc := range cases {
+		m := new(Meta)
+		var moduleDepth int
+		flags := flag.NewFlagSet("test", flag.ContinueOnError)
+		os.Setenv(ModuleDepthEnvVar, tc.EnvVar)
+		m.addModuleDepthFlag(flags, &moduleDepth)
+		err := flags.Parse(tc.Args)
+		if err != nil {
+			t.Fatalf("%s: err: %#v", tn, err)
+		}
+		if moduleDepth != tc.Expected {
+			t.Fatalf("%s: expected: %#v, got: %#v", tn, tc.Expected, moduleDepth)
+		}
 	}
 }
 
-func TestMeta_loadState_remote(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
-
-	err := remote.EnsureDirectory()
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	s := terraform.NewState()
-	s.Serial = 1000
-	conf, srv := testRemoteState(t, s, 200)
-	s.Remote = conf
-	defer srv.Close()
-
-	s.Serial = 500
-	if err := remote.PersistState(s); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	m := new(Meta)
-	s1, err := m.loadState()
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if s1.Serial < 1000 {
-		t.Fatalf("Bad: %#v", s1)
-	}
-
-	if !m.useRemoteState {
-		t.Fatalf("should enable remote")
-	}
-}
-
-func TestMeta_loadState_statePath(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
+func TestMeta_Env(t *testing.T) {
+	td := tempDir(t)
+	os.MkdirAll(td, 0755)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
 
 	m := new(Meta)
 
-	s := terraform.NewState()
-	s.Serial = 1000
-	if err := m.persistLocalState(s); err != nil {
-		t.Fatalf("err: %v", err)
+	env := m.Env()
+
+	if env != backend.DefaultStateName {
+		t.Fatalf("expected env %q, got env %q", backend.DefaultStateName, env)
 	}
 
-	s1, err := m.loadState()
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if s1.Serial < 1000 {
-		t.Fatalf("Bad: %#v", s1)
-	}
-}
-
-func TestMeta_loadState_conflict(t *testing.T) {
-	tmp, cwd := testCwd(t)
-	defer testFixCwd(t, tmp, cwd)
-
-	err := remote.EnsureDirectory()
-	if err != nil {
-		t.Fatalf("err: %v", err)
+	testEnv := "test_env"
+	if err := m.SetEnv(testEnv); err != nil {
+		t.Fatal("error setting env:", err)
 	}
 
-	m := new(Meta)
-
-	s := terraform.NewState()
-	if err := remote.PersistState(s); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if err := m.persistLocalState(s); err != nil {
-		t.Fatalf("err: %v", err)
+	env = m.Env()
+	if env != testEnv {
+		t.Fatalf("expected env %q, got env %q", testEnv, env)
 	}
 
-	_, err = m.loadState()
-	if err == nil {
-		t.Fatalf("should error with conflict")
+	if err := m.SetEnv(backend.DefaultStateName); err != nil {
+		t.Fatal("error setting env:", err)
+	}
+
+	env = m.Env()
+	if env != backend.DefaultStateName {
+		t.Fatalf("expected env %q, got env %q", backend.DefaultStateName, env)
 	}
 }

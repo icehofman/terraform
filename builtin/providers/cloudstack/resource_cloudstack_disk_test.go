@@ -29,22 +29,22 @@ func TestAccCloudStackDisk_basic(t *testing.T) {
 	})
 }
 
-func TestAccCloudStackDisk_device(t *testing.T) {
+func TestAccCloudStackDisk_deviceID(t *testing.T) {
 	var disk cloudstack.Volume
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckCloudStackDiskDestroyAdvanced,
+		CheckDestroy: testAccCheckCloudStackDiskDestroy,
 		Steps: []resource.TestStep{
 			resource.TestStep{
-				Config: testAccCloudStackDisk_device,
+				Config: testAccCloudStackDisk_deviceID,
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackDiskExists(
 						"cloudstack_disk.foo", &disk),
 					testAccCheckCloudStackDiskAttributes(&disk),
 					resource.TestCheckResourceAttr(
-						"cloudstack_disk.foo", "device", "/dev/xvde"),
+						"cloudstack_disk.foo", "device_id", "4"),
 				),
 			},
 		},
@@ -57,7 +57,7 @@ func TestAccCloudStackDisk_update(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckCloudStackDiskDestroyAdvanced,
+		CheckDestroy: testAccCheckCloudStackDiskDestroy,
 		Steps: []resource.TestStep{
 			resource.TestStep{
 				Config: testAccCloudStackDisk_update,
@@ -151,57 +151,9 @@ func testAccCheckCloudStackDiskDestroy(s *terraform.State) error {
 			return fmt.Errorf("No disk ID is set")
 		}
 
-		p := cs.Volume.NewDeleteVolumeParams(rs.Primary.ID)
-		_, err := cs.Volume.DeleteVolume(p)
-
-		if err != nil {
-			return fmt.Errorf(
-				"Error deleting disk (%s): %s",
-				rs.Primary.ID, err)
-		}
-	}
-
-	return nil
-}
-
-func testAccCheckCloudStackDiskDestroyAdvanced(s *terraform.State) error {
-	cs := testAccProvider.Meta().(*cloudstack.CloudStackClient)
-
-	for _, rs := range s.RootModule().Resources {
-		if rs.Type != "cloudstack_disk" {
-			continue
-		}
-
-		if rs.Primary.ID == "" {
-			return fmt.Errorf("No disk ID is set")
-		}
-
-		p := cs.Volume.NewDeleteVolumeParams(rs.Primary.ID)
-		_, err := cs.Volume.DeleteVolume(p)
-
-		if err != nil {
-			return fmt.Errorf(
-				"Error deleting disk (%s): %s",
-				rs.Primary.ID, err)
-		}
-	}
-
-	for _, rs := range s.RootModule().Resources {
-		if rs.Type != "cloudstack_instance" {
-			continue
-		}
-
-		if rs.Primary.ID == "" {
-			return fmt.Errorf("No instance ID is set")
-		}
-
-		p := cs.VirtualMachine.NewDestroyVirtualMachineParams(rs.Primary.ID)
-		_, err := cs.VirtualMachine.DestroyVirtualMachine(p)
-
-		if err != nil {
-			return fmt.Errorf(
-				"Error deleting instance (%s): %s",
-				rs.Primary.ID, err)
+		_, _, err := cs.Volume.GetVolumeByID(rs.Primary.ID)
+		if err == nil {
+			return fmt.Errorf("Disk %s still exists", rs.Primary.ID)
 		}
 	}
 
@@ -218,12 +170,12 @@ resource "cloudstack_disk" "foo" {
 	CLOUDSTACK_DISK_OFFERING_1,
 	CLOUDSTACK_ZONE)
 
-var testAccCloudStackDisk_device = fmt.Sprintf(`
+var testAccCloudStackDisk_deviceID = fmt.Sprintf(`
 resource "cloudstack_instance" "foobar" {
   name = "terraform-test"
   display_name = "terraform"
   service_offering= "%s"
-  network = "%s"
+  network_id = "%s"
   template = "%s"
   zone = "%s"
   expunge = true
@@ -232,9 +184,9 @@ resource "cloudstack_instance" "foobar" {
 resource "cloudstack_disk" "foo" {
   name = "terraform-disk"
   attach = true
-  device = "/dev/xvde"
+  device_id = 4
   disk_offering = "%s"
-  virtual_machine = "${cloudstack_instance.foobar.name}"
+  virtual_machine_id = "${cloudstack_instance.foobar.id}"
   zone = "${cloudstack_instance.foobar.zone}"
 }`,
 	CLOUDSTACK_SERVICE_OFFERING_1,
@@ -248,7 +200,7 @@ resource "cloudstack_instance" "foobar" {
   name = "terraform-test"
   display_name = "terraform"
   service_offering= "%s"
-  network = "%s"
+  network_id = "%s"
   template = "%s"
   zone = "%s"
   expunge = true
@@ -258,7 +210,7 @@ resource "cloudstack_disk" "foo" {
   name = "terraform-disk"
   attach = true
   disk_offering = "%s"
-  virtual_machine = "${cloudstack_instance.foobar.name}"
+  virtual_machine_id = "${cloudstack_instance.foobar.id}"
   zone = "${cloudstack_instance.foobar.zone}"
 }`,
 	CLOUDSTACK_SERVICE_OFFERING_1,
@@ -272,7 +224,7 @@ resource "cloudstack_instance" "foobar" {
   name = "terraform-test"
   display_name = "terraform"
   service_offering= "%s"
-  network = "%s"
+  network_id = "%s"
   template = "%s"
   zone = "%s"
   expunge = true
@@ -282,7 +234,7 @@ resource "cloudstack_disk" "foo" {
   name = "terraform-disk"
   attach = true
   disk_offering = "%s"
-  virtual_machine = "${cloudstack_instance.foobar.name}"
+	virtual_machine_id = "${cloudstack_instance.foobar.id}"
   zone = "${cloudstack_instance.foobar.zone}"
 }`,
 	CLOUDSTACK_SERVICE_OFFERING_1,

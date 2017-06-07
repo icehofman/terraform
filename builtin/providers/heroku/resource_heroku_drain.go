@@ -1,10 +1,14 @@
 package heroku
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/cyberdelia/heroku-go/v3"
+	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
 )
 
@@ -15,25 +19,27 @@ func resourceHerokuDrain() *schema.Resource {
 		Delete: resourceHerokuDrainDelete,
 
 		Schema: map[string]*schema.Schema{
-			"url": &schema.Schema{
+			"url": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"app": &schema.Schema{
+			"app": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"token": &schema.Schema{
+			"token": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
 		},
 	}
 }
+
+const retryableError = `App hasn't yet been assigned a log channel. Please try again momentarily.`
 
 func resourceHerokuDrainCreate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*heroku.Service)
@@ -43,7 +49,18 @@ func resourceHerokuDrainCreate(d *schema.ResourceData, meta interface{}) error {
 
 	log.Printf("[DEBUG] Drain create configuration: %#v, %#v", app, url)
 
-	dr, err := client.LogDrainCreate(app, heroku.LogDrainCreateOpts{url})
+	var dr *heroku.LogDrain
+	err := resource.Retry(2*time.Minute, func() *resource.RetryError {
+		d, err := client.LogDrainCreate(context.TODO(), app, heroku.LogDrainCreateOpts{URL: url})
+		if err != nil {
+			if strings.Contains(err.Error(), retryableError) {
+				return resource.RetryableError(err)
+			}
+			return resource.NonRetryableError(err)
+		}
+		dr = d
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -62,7 +79,7 @@ func resourceHerokuDrainDelete(d *schema.ResourceData, meta interface{}) error {
 	log.Printf("[INFO] Deleting drain: %s", d.Id())
 
 	// Destroy the drain
-	err := client.LogDrainDelete(d.Get("app").(string), d.Id())
+	_, err := client.LogDrainDelete(context.TODO(), d.Get("app").(string), d.Id())
 	if err != nil {
 		return fmt.Errorf("Error deleting drain: %s", err)
 	}
@@ -73,7 +90,7 @@ func resourceHerokuDrainDelete(d *schema.ResourceData, meta interface{}) error {
 func resourceHerokuDrainRead(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*heroku.Service)
 
-	dr, err := client.LogDrainInfo(d.Get("app").(string), d.Id())
+	dr, err := client.LogDrainInfo(context.TODO(), d.Get("app").(string), d.Id())
 	if err != nil {
 		return fmt.Errorf("Error retrieving drain: %s", err)
 	}

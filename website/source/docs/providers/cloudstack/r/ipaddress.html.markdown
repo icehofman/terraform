@@ -6,15 +6,15 @@ description: |-
   Acquires and associates a public IP.
 ---
 
-# cloudstack\_ipaddress
+# cloudstack_ipaddress
 
 Acquires and associates a public IP.
 
 ## Example Usage
 
-```
+```hcl
 resource "cloudstack_ipaddress" "default" {
-  network = "test-network"
+  network_id = "6eb22f91-7454-4107-89f4-36afcdf33021"
 }
 ```
 
@@ -22,17 +22,20 @@ resource "cloudstack_ipaddress" "default" {
 
 The following arguments are supported:
 
-* `network` - (Optional) The name of the network for which an IP address should
+* `network_id` - (Optional) The ID of the network for which an IP address should
     be acquired and associated. Changing this forces a new resource to be created.
 
-* `vpc` - (Optional) The name of the VPC for which an IP address should
-    be acquired and associated. Changing this forces a new resource to be created.
+* `vpc_id` - (Optional) The ID of the VPC for which an IP address should be
+   acquired and associated. Changing this forces a new resource to be created.
 
-*NOTE: Either `network` or `vpc` should have a value!*
+* `project` - (Optional) The name or ID of the project to deploy this
+    instance to. Changing this forces a new resource to be created.
+
+*NOTE: Either `network_id` or `vpc_id` should have a value!*
 
 ## Attributes Reference
 
 The following attributes are exported:
 
 * `id` - The ID of the acquired and associated IP address.
-* `ipaddress` - The IP address that was acquired and associated.
+* `ip_address` - The IP address that was acquired and associated.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/hashicorp/terraform/command/format"
 	"github.com/hashicorp/terraform/terraform"
 )
 
@@ -21,7 +22,7 @@ func (c *ShowCommand) Run(args []string) int {
 	args = c.Meta.process(args, false)
 
 	cmdFlags := flag.NewFlagSet("show", flag.ContinueOnError)
-	cmdFlags.IntVar(&moduleDepth, "module-depth", 0, "module-depth")
+	c.addModuleDepthFlag(cmdFlags, &moduleDepth)
 	cmdFlags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := cmdFlags.Parse(args); err != nil {
 		return 1
@@ -36,7 +37,7 @@ func (c *ShowCommand) Run(args []string) int {
 		return 1
 	}
 
-	var err, planErr, stateErr error
+	var planErr, stateErr error
 	var path string
 	var plan *terraform.Plan
 	var state *terraform.State
@@ -65,15 +66,29 @@ func (c *ShowCommand) Run(args []string) int {
 				stateErr = err
 			}
 		}
-
 	} else {
-		// We should use the default state if it exists.
-		c.Meta.statePath = DefaultStateFilename
-		state, err = c.Meta.loadState()
+		// Load the backend
+		b, err := c.Backend(nil)
 		if err != nil {
-			c.Ui.Error(fmt.Sprintf("Error reading state: %s", err))
+			c.Ui.Error(fmt.Sprintf("Failed to load backend: %s", err))
 			return 1
 		}
+
+		env := c.Env()
+
+		// Get the state
+		stateStore, err := b.State(env)
+		if err != nil {
+			c.Ui.Error(fmt.Sprintf("Failed to load state: %s", err))
+			return 1
+		}
+
+		if err := stateStore.RefreshState(); err != nil {
+			c.Ui.Error(fmt.Sprintf("Failed to load state: %s", err))
+			return 1
+		}
+
+		state = stateStore.State()
 		if state == nil {
 			c.Ui.Output("No state.")
 			return 0
@@ -92,7 +107,7 @@ func (c *ShowCommand) Run(args []string) int {
 	}
 
 	if plan != nil {
-		c.Ui.Output(FormatPlan(&FormatPlanOpts{
+		c.Ui.Output(format.Plan(&format.PlanOpts{
 			Plan:        plan,
 			Color:       c.Colorize(),
 			ModuleDepth: moduleDepth,
@@ -100,7 +115,7 @@ func (c *ShowCommand) Run(args []string) int {
 		return 0
 	}
 
-	c.Ui.Output(FormatState(&FormatStateOpts{
+	c.Ui.Output(format.State(&format.StateOpts{
 		State:       state,
 		Color:       c.Colorize(),
 		ModuleDepth: moduleDepth,
@@ -118,7 +133,7 @@ Usage: terraform show [options] [path]
 Options:
 
   -module-depth=n     Specifies the depth of modules to show in the output.
-                      By default this is zero. -1 will expand all.
+                      By default this is -1, which will expand all.
 
   -no-color           If specified, output won't contain any color.
 

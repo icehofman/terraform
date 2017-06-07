@@ -14,7 +14,7 @@ of the ways Terraform can be used.
 All examples are ready to run as-is. Terraform will
 ask for input of things such as variables and API keys. If you want to
 continue using the example, you should save those parameters in a
-"terraform.tfvars" file or in a `provider` config bock.
+"terraform.tfvars" file or in a `provider` config block.
 
 ~> **Warning!** The examples use real providers that launch _real_ resources.
 That means they can cost money to experiment with. To avoid unexpected charges,
@@ -42,13 +42,16 @@ Once installed, you can use two steps to view and run the examples.
 To clone any examples, run `terraform init` with the URL to the example:
 
 ```
-$ terraform init github.com/hashicorp/terraform/examples/aws-two-tier
+$ terraform init github.com/hashicorp/terraform/tree/master/examples/aws-two-tier
 ...
 ```
 
 This will put the example files within your working directory. You can then
 use your own editor to read and browse the configurations. This command will
 not _run_ any code.
+
+~> If you want to browse the files before downloading them, you can [view
+them on GitHub](https://github.com/hashicorp/terraform/tree/master/examples/aws-two-tier).
 
 If you want to run the example, just run `terraform apply`:
 

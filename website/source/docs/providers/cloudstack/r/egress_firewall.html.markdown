@@ -6,20 +6,20 @@ description: |-
   Creates egress firewall rules for a given network.
 ---
 
-# cloudstack\_egress\_firewall
+# cloudstack_egress_firewall
 
 Creates egress firewall rules for a given network.
 
 ## Example Usage
 
-```
+```hcl
 resource "cloudstack_egress_firewall" "default" {
-  network = "test-network"
+  network_id = "6eb22f91-7454-4107-89f4-36afcdf33021"
 
   rule {
-    source_cidr = "10.0.0.0/8"
-    protocol = "tcp"
-    ports = ["80", "1000-2000"]
+    cidr_list = ["10.0.0.0/8"]
+    protocol  = "tcp"
+    ports     = ["80", "1000-2000"]
   }
 }
 ```
@@ -28,8 +28,8 @@ resource "cloudstack_egress_firewall" "default" {
 
 The following arguments are supported:
 
-* `network` - (Required) The network for which to create the egress firewall
-    rules. Changing this forces a new resource to be created.
+* `network_id` - (Required) The network ID for which to create the egress
+    firewall rules. Changing this forces a new resource to be created.
 
 * `managed` - (Optional) USE WITH CAUTION! If enabled all the egress firewall
     rules for this network will be managed by this resource. This means it will
@@ -38,9 +38,12 @@ The following arguments are supported:
 * `rule` - (Optional) Can be specified multiple times. Each rule block supports
     fields documented below. If `managed = false` at least one rule is required!
 
+* `parallelism` (Optional) Specifies how much rules will be created or deleted
+    concurrently. (defaults 2)
+
 The `rule` block supports:
 
-* `source_cidr` - (Required) The source CIDR to allow access to the given ports.
+* `cidr_list` - (Required) A CIDR list to allow access to the given ports.
 
 * `protocol` - (Required) The name of the protocol to allow. Valid options are:
     `tcp`, `udp` and `icmp`.
@@ -58,4 +61,4 @@ The `rule` block supports:
 
 The following attributes are exported:
 
-* `ID` - The network ID for which the egress firewall rules are created.
+* `id` - The network ID for which the egress firewall rules are created.

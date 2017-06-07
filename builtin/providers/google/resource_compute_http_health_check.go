@@ -3,11 +3,9 @@ package google
 import (
 	"fmt"
 	"log"
-	"time"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
-	"code.google.com/p/google-api-go-client/googleapi"
 	"github.com/hashicorp/terraform/helper/schema"
+	"google.golang.org/api/compute/v1"
 )
 
 func resourceComputeHttpHealthCheck() *schema.Resource {
@@ -16,12 +14,21 @@ func resourceComputeHttpHealthCheck() *schema.Resource {
 		Read:   resourceComputeHttpHealthCheckRead,
 		Delete: resourceComputeHttpHealthCheckDelete,
 		Update: resourceComputeHttpHealthCheckUpdate,
+		Importer: &schema.ResourceImporter{
+			State: schema.ImportStatePassthrough,
+		},
 
 		Schema: map[string]*schema.Schema{
+			"name": &schema.Schema{
+				Type:     schema.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
 			"check_interval_sec": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
-				Computed: true,
+				Default:  5,
 			},
 
 			"description": &schema.Schema{
@@ -32,7 +39,7 @@ func resourceComputeHttpHealthCheck() *schema.Resource {
 			"healthy_threshold": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
-				Computed: true,
+				Default:  2,
 			},
 
 			"host": &schema.Schema{
@@ -40,22 +47,23 @@ func resourceComputeHttpHealthCheck() *schema.Resource {
 				Optional: true,
 			},
 
-			"name": &schema.Schema{
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
-			},
-
 			"port": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
+				Default:  80,
+			},
+
+			"project": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
 				Computed: true,
 			},
 
 			"request_path": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
-				Computed: true,
+				Default:  "/",
 			},
 
 			"self_link": &schema.Schema{
@@ -66,13 +74,13 @@ func resourceComputeHttpHealthCheck() *schema.Resource {
 			"timeout_sec": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
-				Computed: true,
+				Default:  5,
 			},
 
 			"unhealthy_threshold": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
-				Computed: true,
+				Default:  2,
 			},
 		},
 	}
@@ -80,6 +88,11 @@ func resourceComputeHttpHealthCheck() *schema.Resource {
 
 func resourceComputeHttpHealthCheckCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
+
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
 
 	// Build the parameter
 	hchk := &compute.HttpHealthCheck{
@@ -98,7 +111,7 @@ func resourceComputeHttpHealthCheckCreate(d *schema.ResourceData, meta interface
 	if v, ok := d.GetOk("check_interval_sec"); ok {
 		hchk.CheckIntervalSec = int64(v.(int))
 	}
-	if v, ok := d.GetOk("health_threshold"); ok {
+	if v, ok := d.GetOk("healthy_threshold"); ok {
 		hchk.HealthyThreshold = int64(v.(int))
 	}
 	if v, ok := d.GetOk("port"); ok {
@@ -113,7 +126,7 @@ func resourceComputeHttpHealthCheckCreate(d *schema.ResourceData, meta interface
 
 	log.Printf("[DEBUG] HttpHealthCheck insert request: %#v", hchk)
 	op, err := config.clientCompute.HttpHealthChecks.Insert(
-		config.Project, hchk).Do()
+		project, hchk).Do()
 	if err != nil {
 		return fmt.Errorf("Error creating HttpHealthCheck: %s", err)
 	}
@@ -121,27 +134,9 @@ func resourceComputeHttpHealthCheckCreate(d *schema.ResourceData, meta interface
 	// It probably maybe worked, so store the ID now
 	d.SetId(hchk.Name)
 
-	// Wait for the operation to complete
-	w := &OperationWaiter{
-		Service: config.clientCompute,
-		Op:      op,
-		Project: config.Project,
-		Type:    OperationWaitGlobal,
-	}
-	state := w.Conf()
-	state.Timeout = 2 * time.Minute
-	state.MinTimeout = 1 * time.Second
-	opRaw, err := state.WaitForState()
+	err = computeOperationWaitGlobal(config, op, project, "Creating Http Health Check")
 	if err != nil {
-		return fmt.Errorf("Error waiting for HttpHealthCheck to create: %s", err)
-	}
-	op = opRaw.(*compute.Operation)
-	if op.Error != nil {
-		// The resource didn't actually create
-		d.SetId("")
-
-		// Return the error
-		return OperationError(*op.Error)
+		return err
 	}
 
 	return resourceComputeHttpHealthCheckRead(d, meta)
@@ -149,6 +144,11 @@ func resourceComputeHttpHealthCheckCreate(d *schema.ResourceData, meta interface
 
 func resourceComputeHttpHealthCheckUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
+
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
 
 	// Build the parameter
 	hchk := &compute.HttpHealthCheck{
@@ -167,7 +167,7 @@ func resourceComputeHttpHealthCheckUpdate(d *schema.ResourceData, meta interface
 	if v, ok := d.GetOk("check_interval_sec"); ok {
 		hchk.CheckIntervalSec = int64(v.(int))
 	}
-	if v, ok := d.GetOk("health_threshold"); ok {
+	if v, ok := d.GetOk("healthy_threshold"); ok {
 		hchk.HealthyThreshold = int64(v.(int))
 	}
 	if v, ok := d.GetOk("port"); ok {
@@ -182,7 +182,7 @@ func resourceComputeHttpHealthCheckUpdate(d *schema.ResourceData, meta interface
 
 	log.Printf("[DEBUG] HttpHealthCheck patch request: %#v", hchk)
 	op, err := config.clientCompute.HttpHealthChecks.Patch(
-		config.Project, hchk.Name, hchk).Do()
+		project, hchk.Name, hchk).Do()
 	if err != nil {
 		return fmt.Errorf("Error patching HttpHealthCheck: %s", err)
 	}
@@ -190,27 +190,9 @@ func resourceComputeHttpHealthCheckUpdate(d *schema.ResourceData, meta interface
 	// It probably maybe worked, so store the ID now
 	d.SetId(hchk.Name)
 
-	// Wait for the operation to complete
-	w := &OperationWaiter{
-		Service: config.clientCompute,
-		Op:      op,
-		Project: config.Project,
-		Type:    OperationWaitGlobal,
-	}
-	state := w.Conf()
-	state.Timeout = 2 * time.Minute
-	state.MinTimeout = 1 * time.Second
-	opRaw, err := state.WaitForState()
+	err = computeOperationWaitGlobal(config, op, project, "Updating Http Health Check")
 	if err != nil {
-		return fmt.Errorf("Error waiting for HttpHealthCheck to patch: %s", err)
-	}
-	op = opRaw.(*compute.Operation)
-	if op.Error != nil {
-		// The resource didn't actually create
-		d.SetId("")
-
-		// Return the error
-		return OperationError(*op.Error)
+		return err
 	}
 
 	return resourceComputeHttpHealthCheckRead(d, meta)
@@ -219,27 +201,28 @@ func resourceComputeHttpHealthCheckUpdate(d *schema.ResourceData, meta interface
 func resourceComputeHttpHealthCheckRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
-	hchk, err := config.clientCompute.HttpHealthChecks.Get(
-		config.Project, d.Id()).Do()
+	project, err := getProject(d, config)
 	if err != nil {
-		if gerr, ok := err.(*googleapi.Error); ok && gerr.Code == 404 {
-			// The resource doesn't exist anymore
-			d.SetId("")
+		return err
+	}
 
-			return nil
-		}
-
-		return fmt.Errorf("Error reading HttpHealthCheck: %s", err)
+	hchk, err := config.clientCompute.HttpHealthChecks.Get(
+		project, d.Id()).Do()
+	if err != nil {
+		return handleNotFoundError(err, d, fmt.Sprintf("HTTP Health Check %q", d.Get("name").(string)))
 	}
 
 	d.Set("host", hchk.Host)
 	d.Set("request_path", hchk.RequestPath)
 	d.Set("check_interval_sec", hchk.CheckIntervalSec)
-	d.Set("health_threshold", hchk.HealthyThreshold)
+	d.Set("healthy_threshold", hchk.HealthyThreshold)
 	d.Set("port", hchk.Port)
 	d.Set("timeout_sec", hchk.TimeoutSec)
 	d.Set("unhealthy_threshold", hchk.UnhealthyThreshold)
 	d.Set("self_link", hchk.SelfLink)
+	d.Set("name", hchk.Name)
+	d.Set("description", hchk.Description)
+	d.Set("project", project)
 
 	return nil
 }
@@ -247,31 +230,21 @@ func resourceComputeHttpHealthCheckRead(d *schema.ResourceData, meta interface{}
 func resourceComputeHttpHealthCheckDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
+
 	// Delete the HttpHealthCheck
 	op, err := config.clientCompute.HttpHealthChecks.Delete(
-		config.Project, d.Id()).Do()
+		project, d.Id()).Do()
 	if err != nil {
 		return fmt.Errorf("Error deleting HttpHealthCheck: %s", err)
 	}
 
-	// Wait for the operation to complete
-	w := &OperationWaiter{
-		Service: config.clientCompute,
-		Op:      op,
-		Project: config.Project,
-		Type:    OperationWaitGlobal,
-	}
-	state := w.Conf()
-	state.Timeout = 2 * time.Minute
-	state.MinTimeout = 1 * time.Second
-	opRaw, err := state.WaitForState()
+	err = computeOperationWaitGlobal(config, op, project, "Deleting Http Health Check")
 	if err != nil {
-		return fmt.Errorf("Error waiting for HttpHealthCheck to delete: %s", err)
-	}
-	op = opRaw.(*compute.Operation)
-	if op.Error != nil {
-		// Return the error
-		return OperationError(*op.Error)
+		return err
 	}
 
 	d.SetId("")

@@ -11,6 +11,104 @@ func TestDiffFieldReader_impl(t *testing.T) {
 	var _ FieldReader = new(DiffFieldReader)
 }
 
+func TestDiffFieldReader_NestedSetUpdate(t *testing.T) {
+	hashFn := func(a interface{}) int {
+		m := a.(map[string]interface{})
+		return m["val"].(int)
+	}
+
+	schema := map[string]*Schema{
+		"list_of_sets_1": &Schema{
+			Type: TypeList,
+			Elem: &Resource{
+				Schema: map[string]*Schema{
+					"nested_set": &Schema{
+						Type: TypeSet,
+						Elem: &Resource{
+							Schema: map[string]*Schema{
+								"val": &Schema{
+									Type: TypeInt,
+								},
+							},
+						},
+						Set: hashFn,
+					},
+				},
+			},
+		},
+		"list_of_sets_2": &Schema{
+			Type: TypeList,
+			Elem: &Resource{
+				Schema: map[string]*Schema{
+					"nested_set": &Schema{
+						Type: TypeSet,
+						Elem: &Resource{
+							Schema: map[string]*Schema{
+								"val": &Schema{
+									Type: TypeInt,
+								},
+							},
+						},
+						Set: hashFn,
+					},
+				},
+			},
+		},
+	}
+
+	r := &DiffFieldReader{
+		Schema: schema,
+		Diff: &terraform.InstanceDiff{
+			Attributes: map[string]*terraform.ResourceAttrDiff{
+				"list_of_sets_1.0.nested_set.1.val": &terraform.ResourceAttrDiff{
+					Old:        "1",
+					New:        "0",
+					NewRemoved: true,
+				},
+				"list_of_sets_1.0.nested_set.2.val": &terraform.ResourceAttrDiff{
+					New: "2",
+				},
+			},
+		},
+	}
+
+	r.Source = &MultiLevelFieldReader{
+		Readers: map[string]FieldReader{
+			"diff": r,
+			"set":  &MapFieldReader{Schema: schema},
+			"state": &MapFieldReader{
+				Map: &BasicMapReader{
+					"list_of_sets_1.#":                  "1",
+					"list_of_sets_1.0.nested_set.#":     "1",
+					"list_of_sets_1.0.nested_set.1.val": "1",
+					"list_of_sets_2.#":                  "1",
+					"list_of_sets_2.0.nested_set.#":     "1",
+					"list_of_sets_2.0.nested_set.1.val": "1",
+				},
+				Schema: schema,
+			},
+		},
+		Levels: []string{"state", "config"},
+	}
+
+	out, err := r.ReadField([]string{"list_of_sets_2"})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	s := &Set{F: hashFn}
+	s.Add(map[string]interface{}{"val": 1})
+	expected := s.List()
+
+	l := out.Value.([]interface{})
+	i := l[0].(map[string]interface{})
+	actual := i["nested_set"].(*Set).List()
+
+	if !reflect.DeepEqual(expected, actual) {
+		t.Fatalf("bad: NestedSetUpdate\n\nexpected: %#v\n\ngot: %#v\n\n", expected, actual)
+	}
+}
+
 // https://github.com/hashicorp/terraform/issues/914
 func TestDiffFieldReader_MapHandling(t *testing.T) {
 	schema := map[string]*Schema{
@@ -22,7 +120,7 @@ func TestDiffFieldReader_MapHandling(t *testing.T) {
 		Schema: schema,
 		Diff: &terraform.InstanceDiff{
 			Attributes: map[string]*terraform.ResourceAttrDiff{
-				"tags.#": &terraform.ResourceAttrDiff{
+				"tags.%": &terraform.ResourceAttrDiff{
 					Old: "1",
 					New: "2",
 				},
@@ -35,7 +133,7 @@ func TestDiffFieldReader_MapHandling(t *testing.T) {
 		Source: &MapFieldReader{
 			Schema: schema,
 			Map: BasicMapReader(map[string]string{
-				"tags.#":   "1",
+				"tags.%":   "1",
 				"tags.foo": "bar",
 			}),
 		},
@@ -90,6 +188,28 @@ func TestDiffFieldReader_extra(t *testing.T) {
 				return m["index"].(int)
 			},
 		},
+
+		"setEmpty": &Schema{
+			Type:     TypeSet,
+			Optional: true,
+			Elem: &Resource{
+				Schema: map[string]*Schema{
+					"index": &Schema{
+						Type:     TypeInt,
+						Required: true,
+					},
+
+					"value": &Schema{
+						Type:     TypeString,
+						Required: true,
+					},
+				},
+			},
+			Set: func(a interface{}) int {
+				m := a.(map[string]interface{})
+				return m["index"].(int)
+			},
+		},
 	}
 
 	r := &DiffFieldReader{
@@ -114,6 +234,11 @@ func TestDiffFieldReader_extra(t *testing.T) {
 					Old: "50",
 					New: "80",
 				},
+
+				"setEmpty.#": &terraform.ResourceAttrDiff{
+					Old: "2",
+					New: "0",
+				},
 			},
 		},
 
@@ -131,6 +256,12 @@ func TestDiffFieldReader_extra(t *testing.T) {
 				"setChange.#":        "1",
 				"setChange.10.index": "10",
 				"setChange.10.value": "50",
+
+				"setEmpty.#":        "2",
+				"setEmpty.10.index": "10",
+				"setEmpty.10.value": "50",
+				"setEmpty.20.index": "20",
+				"setEmpty.20.value": "50",
 			}),
 		},
 	}
@@ -191,11 +322,20 @@ func TestDiffFieldReader_extra(t *testing.T) {
 			},
 			false,
 		},
+
+		"setEmpty": {
+			[]string{"setEmpty"},
+			FieldReadResult{
+				Value:  []interface{}{},
+				Exists: true,
+			},
+			false,
+		},
 	}
 
 	for name, tc := range cases {
 		out, err := r.ReadField(tc.Addr)
-		if (err != nil) != tc.Err {
+		if err != nil != tc.Err {
 			t.Fatalf("%s: err: %s", name, err)
 		}
 		if s, ok := out.Value.(*Set); ok {
@@ -278,6 +418,41 @@ func TestDiffFieldReader(t *testing.T) {
 					"map.bar": &terraform.ResourceAttrDiff{
 						Old: "",
 						New: "baz",
+					},
+
+					"mapInt.%": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "2",
+					},
+					"mapInt.one": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "1",
+					},
+					"mapInt.two": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "2",
+					},
+
+					"mapFloat.%": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "1",
+					},
+					"mapFloat.oneDotTwo": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "1.2",
+					},
+
+					"mapBool.%": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "2",
+					},
+					"mapBool.True": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "true",
+					},
+					"mapBool.False": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "false",
 					},
 
 					"set.#": &terraform.ResourceAttrDiff{

@@ -1,8 +1,12 @@
 package terraform
 
+import "sync"
+
 // MockHook is an implementation of Hook that can be used for tests.
 // It records all of its function calls.
 type MockHook struct {
+	sync.Mutex
+
 	PreApplyCalled bool
 	PreApplyInfo   *InstanceInfo
 	PreApplyDiff   *InstanceDiff
@@ -16,6 +20,7 @@ type MockHook struct {
 	PostApplyError       error
 	PostApplyReturn      HookAction
 	PostApplyReturnError error
+	PostApplyFn          func(*InstanceInfo, *InstanceState, error) (HookAction, error)
 
 	PreDiffCalled bool
 	PreDiffInfo   *InstanceInfo
@@ -50,6 +55,7 @@ type MockHook struct {
 	PostProvisionCalled        bool
 	PostProvisionInfo          *InstanceInfo
 	PostProvisionProvisionerId string
+	PostProvisionErrorArg      error
 	PostProvisionReturn        HookAction
 	PostProvisionError         error
 
@@ -69,9 +75,29 @@ type MockHook struct {
 	PreRefreshState  *InstanceState
 	PreRefreshReturn HookAction
 	PreRefreshError  error
+
+	PreImportStateCalled bool
+	PreImportStateInfo   *InstanceInfo
+	PreImportStateId     string
+	PreImportStateReturn HookAction
+	PreImportStateError  error
+
+	PostImportStateCalled bool
+	PostImportStateInfo   *InstanceInfo
+	PostImportStateState  []*InstanceState
+	PostImportStateReturn HookAction
+	PostImportStateError  error
+
+	PostStateUpdateCalled bool
+	PostStateUpdateState  *State
+	PostStateUpdateReturn HookAction
+	PostStateUpdateError  error
 }
 
 func (h *MockHook) PreApply(n *InstanceInfo, s *InstanceState, d *InstanceDiff) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PreApplyCalled = true
 	h.PreApplyInfo = n
 	h.PreApplyDiff = d
@@ -80,14 +106,25 @@ func (h *MockHook) PreApply(n *InstanceInfo, s *InstanceState, d *InstanceDiff) 
 }
 
 func (h *MockHook) PostApply(n *InstanceInfo, s *InstanceState, e error) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PostApplyCalled = true
 	h.PostApplyInfo = n
 	h.PostApplyState = s
 	h.PostApplyError = e
+
+	if h.PostApplyFn != nil {
+		return h.PostApplyFn(n, s, e)
+	}
+
 	return h.PostApplyReturn, h.PostApplyReturnError
 }
 
 func (h *MockHook) PreDiff(n *InstanceInfo, s *InstanceState) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PreDiffCalled = true
 	h.PreDiffInfo = n
 	h.PreDiffState = s
@@ -95,6 +132,9 @@ func (h *MockHook) PreDiff(n *InstanceInfo, s *InstanceState) (HookAction, error
 }
 
 func (h *MockHook) PostDiff(n *InstanceInfo, d *InstanceDiff) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PostDiffCalled = true
 	h.PostDiffInfo = n
 	h.PostDiffDiff = d
@@ -102,6 +142,9 @@ func (h *MockHook) PostDiff(n *InstanceInfo, d *InstanceDiff) (HookAction, error
 }
 
 func (h *MockHook) PreProvisionResource(n *InstanceInfo, s *InstanceState) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PreProvisionResourceCalled = true
 	h.PreProvisionResourceInfo = n
 	h.PreProvisionInstanceState = s
@@ -109,6 +152,9 @@ func (h *MockHook) PreProvisionResource(n *InstanceInfo, s *InstanceState) (Hook
 }
 
 func (h *MockHook) PostProvisionResource(n *InstanceInfo, s *InstanceState) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PostProvisionResourceCalled = true
 	h.PostProvisionResourceInfo = n
 	h.PostProvisionInstanceState = s
@@ -116,16 +162,23 @@ func (h *MockHook) PostProvisionResource(n *InstanceInfo, s *InstanceState) (Hoo
 }
 
 func (h *MockHook) PreProvision(n *InstanceInfo, provId string) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PreProvisionCalled = true
 	h.PreProvisionInfo = n
 	h.PreProvisionProvisionerId = provId
 	return h.PreProvisionReturn, h.PreProvisionError
 }
 
-func (h *MockHook) PostProvision(n *InstanceInfo, provId string) (HookAction, error) {
+func (h *MockHook) PostProvision(n *InstanceInfo, provId string, err error) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PostProvisionCalled = true
 	h.PostProvisionInfo = n
 	h.PostProvisionProvisionerId = provId
+	h.PostProvisionErrorArg = err
 	return h.PostProvisionReturn, h.PostProvisionError
 }
 
@@ -133,6 +186,9 @@ func (h *MockHook) ProvisionOutput(
 	n *InstanceInfo,
 	provId string,
 	msg string) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.ProvisionOutputCalled = true
 	h.ProvisionOutputInfo = n
 	h.ProvisionOutputProvisionerId = provId
@@ -140,6 +196,9 @@ func (h *MockHook) ProvisionOutput(
 }
 
 func (h *MockHook) PreRefresh(n *InstanceInfo, s *InstanceState) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PreRefreshCalled = true
 	h.PreRefreshInfo = n
 	h.PreRefreshState = s
@@ -147,8 +206,40 @@ func (h *MockHook) PreRefresh(n *InstanceInfo, s *InstanceState) (HookAction, er
 }
 
 func (h *MockHook) PostRefresh(n *InstanceInfo, s *InstanceState) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PostRefreshCalled = true
 	h.PostRefreshInfo = n
 	h.PostRefreshState = s
 	return h.PostRefreshReturn, h.PostRefreshError
+}
+
+func (h *MockHook) PreImportState(info *InstanceInfo, id string) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.PreImportStateCalled = true
+	h.PreImportStateInfo = info
+	h.PreImportStateId = id
+	return h.PreImportStateReturn, h.PreImportStateError
+}
+
+func (h *MockHook) PostImportState(info *InstanceInfo, s []*InstanceState) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.PostImportStateCalled = true
+	h.PostImportStateInfo = info
+	h.PostImportStateState = s
+	return h.PostImportStateReturn, h.PostImportStateError
+}
+
+func (h *MockHook) PostStateUpdate(s *State) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.PostStateUpdateCalled = true
+	h.PostStateUpdateState = s
+	return h.PostStateUpdateReturn, h.PostStateUpdateError
 }

@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/ec2"
 )
 
-func TestAccAWSInternetGateway(t *testing.T) {
+func TestAccAWSInternetGateway_basic(t *testing.T) {
 	var v, v2 ec2.InternetGateway
 
 	testNotEqual := func(*terraform.State) error {
@@ -30,9 +32,10 @@ func TestAccAWSInternetGateway(t *testing.T) {
 	}
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
-		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckInternetGatewayDestroy,
+		PreCheck:      func() { testAccPreCheck(t) },
+		IDRefreshName: "aws_internet_gateway.foo",
+		Providers:     testAccProviders,
+		CheckDestroy:  testAccCheckInternetGatewayDestroy,
 		Steps: []resource.TestStep{
 			resource.TestStep{
 				Config: testAccInternetGatewayConfig,
@@ -68,9 +71,10 @@ func TestAccAWSInternetGateway_delete(t *testing.T) {
 	}
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
-		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckInternetGatewayDestroy,
+		PreCheck:      func() { testAccPreCheck(t) },
+		IDRefreshName: "aws_internet_gateway.foo",
+		Providers:     testAccProviders,
+		CheckDestroy:  testAccCheckInternetGatewayDestroy,
 		Steps: []resource.TestStep{
 			resource.TestStep{
 				Config: testAccInternetGatewayConfig,
@@ -85,18 +89,20 @@ func TestAccAWSInternetGateway_delete(t *testing.T) {
 	})
 }
 
-func TestAccInternetGateway_tags(t *testing.T) {
+func TestAccAWSInternetGateway_tags(t *testing.T) {
 	var v ec2.InternetGateway
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
-		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckInternetGatewayDestroy,
+		PreCheck:      func() { testAccPreCheck(t) },
+		IDRefreshName: "aws_internet_gateway.foo",
+		Providers:     testAccProviders,
+		CheckDestroy:  testAccCheckInternetGatewayDestroy,
 		Steps: []resource.TestStep{
 			resource.TestStep{
 				Config: testAccCheckInternetGatewayConfigTags,
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckInternetGatewayExists("aws_internet_gateway.foo", &v),
+					testAccCheckTags(&v.Tags, "foo", "bar"),
 				),
 			},
 
@@ -121,8 +127,9 @@ func testAccCheckInternetGatewayDestroy(s *terraform.State) error {
 		}
 
 		// Try to find the resource
-		resp, err := conn.DescribeInternetGateways(
-			[]string{rs.Primary.ID}, ec2.NewFilter())
+		resp, err := conn.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+			InternetGatewayIds: []*string{aws.String(rs.Primary.ID)},
+		})
 		if err == nil {
 			if len(resp.InternetGateways) > 0 {
 				return fmt.Errorf("still exists")
@@ -132,11 +139,11 @@ func testAccCheckInternetGatewayDestroy(s *terraform.State) error {
 		}
 
 		// Verify the error is what we want
-		ec2err, ok := err.(*ec2.Error)
+		ec2err, ok := err.(awserr.Error)
 		if !ok {
 			return err
 		}
-		if ec2err.Code != "InvalidInternetGatewayID.NotFound" {
+		if ec2err.Code() != "InvalidInternetGatewayID.NotFound" {
 			return err
 		}
 	}
@@ -156,8 +163,9 @@ func testAccCheckInternetGatewayExists(n string, ig *ec2.InternetGateway) resour
 		}
 
 		conn := testAccProvider.Meta().(*AWSClient).ec2conn
-		resp, err := conn.DescribeInternetGateways(
-			[]string{rs.Primary.ID}, ec2.NewFilter())
+		resp, err := conn.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+			InternetGatewayIds: []*string{aws.String(rs.Primary.ID)},
+		})
 		if err != nil {
 			return err
 		}
@@ -165,7 +173,7 @@ func testAccCheckInternetGatewayExists(n string, ig *ec2.InternetGateway) resour
 			return fmt.Errorf("InternetGateway not found")
 		}
 
-		*ig = resp.InternetGateways[0]
+		*ig = *resp.InternetGateways[0]
 
 		return nil
 	}
@@ -174,12 +182,18 @@ func testAccCheckInternetGatewayExists(n string, ig *ec2.InternetGateway) resour
 const testAccNoInternetGatewayConfig = `
 resource "aws_vpc" "foo" {
 	cidr_block = "10.1.0.0/16"
+	tags {
+		Name = "testAccNoInternetGatewayConfig"
+	}
 }
 `
 
 const testAccInternetGatewayConfig = `
 resource "aws_vpc" "foo" {
 	cidr_block = "10.1.0.0/16"
+	tags {
+		Name = "testAccInternetGatewayConfig"
+	}
 }
 
 resource "aws_internet_gateway" "foo" {
@@ -190,10 +204,16 @@ resource "aws_internet_gateway" "foo" {
 const testAccInternetGatewayConfigChangeVPC = `
 resource "aws_vpc" "foo" {
 	cidr_block = "10.1.0.0/16"
+	tags {
+		Name = "testAccInternetGatewayConfigChangeVPC"
+	}
 }
 
 resource "aws_vpc" "bar" {
 	cidr_block = "10.2.0.0/16"
+	tags {
+		Name = "testAccInternetGatewayConfigChangeVPC_other"
+	}
 }
 
 resource "aws_internet_gateway" "foo" {
@@ -204,6 +224,9 @@ resource "aws_internet_gateway" "foo" {
 const testAccCheckInternetGatewayConfigTags = `
 resource "aws_vpc" "foo" {
 	cidr_block = "10.1.0.0/16"
+	tags {
+		Name = "testAccCheckInternetGatewayConfigTags"
+	}
 }
 
 resource "aws_internet_gateway" "foo" {
@@ -217,6 +240,9 @@ resource "aws_internet_gateway" "foo" {
 const testAccCheckInternetGatewayConfigTagsUpdate = `
 resource "aws_vpc" "foo" {
 	cidr_block = "10.1.0.0/16"
+	tags {
+		Name = "testAccCheckInternetGatewayConfigTagsUpdate"
+	}
 }
 
 resource "aws_internet_gateway" "foo" {

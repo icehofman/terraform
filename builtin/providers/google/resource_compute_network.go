@@ -3,11 +3,9 @@ package google
 import (
 	"fmt"
 	"log"
-	"time"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
-	"code.google.com/p/google-api-go-client/googleapi"
 	"github.com/hashicorp/terraform/helper/schema"
+	"google.golang.org/api/compute/v1"
 )
 
 func resourceComputeNetwork() *schema.Resource {
@@ -15,6 +13,9 @@ func resourceComputeNetwork() *schema.Resource {
 		Create: resourceComputeNetworkCreate,
 		Read:   resourceComputeNetworkRead,
 		Delete: resourceComputeNetworkDelete,
+		Importer: &schema.ResourceImporter{
+			State: schema.ImportStatePassthrough,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"name": &schema.Schema{
@@ -23,15 +24,40 @@ func resourceComputeNetwork() *schema.Resource {
 				ForceNew: true,
 			},
 
-			"ipv4_range": &schema.Schema{
+			"auto_create_subnetworks": &schema.Schema{
+				Type:     schema.TypeBool,
+				Optional: true,
+				ForceNew: true,
+				/* Ideally this would default to true as per the API, but that would cause
+				   existing Terraform configs which have not been updated to report this as
+				   a change. Perhaps we can bump this for a minor release bump rather than
+				   a point release.
+				Default: false, */
+				ConflictsWith: []string{"ipv4_range"},
+			},
+
+			"description": &schema.Schema{
 				Type:     schema.TypeString,
-				Required: true,
+				Optional: true,
 				ForceNew: true,
 			},
 
 			"gateway_ipv4": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
+			},
+
+			"ipv4_range": &schema.Schema{
+				Type:       schema.TypeString,
+				Optional:   true,
+				ForceNew:   true,
+				Deprecated: "Please use google_compute_subnetwork resources instead.",
+			},
+
+			"project": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
 			},
 
 			"self_link": &schema.Schema{
@@ -45,14 +71,40 @@ func resourceComputeNetwork() *schema.Resource {
 func resourceComputeNetworkCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
+
+	//
+	// Possible modes:
+	// - 1 Legacy mode - Create a network in the legacy mode. ipv4_range is set. auto_create_subnetworks must not be
+	//     set (enforced by ConflictsWith schema attribute)
+	// - 2 Distributed Mode - Create a new generation network that supports subnetworks:
+	//   - 2.a - Auto subnet mode - auto_create_subnetworks = true, Google will generate 1 subnetwork per region
+	//   - 2.b - Custom subnet mode - auto_create_subnetworks = false & ipv4_range not set,
+	//
+	autoCreateSubnetworks := d.Get("auto_create_subnetworks").(bool)
+
 	// Build the network parameter
 	network := &compute.Network{
-		Name:      d.Get("name").(string),
-		IPv4Range: d.Get("ipv4_range").(string),
+		Name: d.Get("name").(string),
+		AutoCreateSubnetworks: autoCreateSubnetworks,
+		Description:           d.Get("description").(string),
 	}
+
+	if v, ok := d.GetOk("ipv4_range"); ok {
+		log.Printf("[DEBUG] Setting IPv4Range (%#v) for legacy network mode", v.(string))
+		network.IPv4Range = v.(string)
+	} else {
+		// custom subnet mode, so make sure AutoCreateSubnetworks field is included in request otherwise
+		// google will create a network in legacy mode.
+		network.ForceSendFields = []string{"AutoCreateSubnetworks"}
+	}
+
 	log.Printf("[DEBUG] Network insert request: %#v", network)
 	op, err := config.clientCompute.Networks.Insert(
-		config.Project, network).Do()
+		project, network).Do()
 	if err != nil {
 		return fmt.Errorf("Error creating network: %s", err)
 	}
@@ -60,27 +112,9 @@ func resourceComputeNetworkCreate(d *schema.ResourceData, meta interface{}) erro
 	// It probably maybe worked, so store the ID now
 	d.SetId(network.Name)
 
-	// Wait for the operation to complete
-	w := &OperationWaiter{
-		Service: config.clientCompute,
-		Op:      op,
-		Project: config.Project,
-		Type:    OperationWaitGlobal,
-	}
-	state := w.Conf()
-	state.Timeout = 2 * time.Minute
-	state.MinTimeout = 1 * time.Second
-	opRaw, err := state.WaitForState()
+	err = computeOperationWaitGlobal(config, op, project, "Creating Network")
 	if err != nil {
-		return fmt.Errorf("Error waiting for network to create: %s", err)
-	}
-	op = opRaw.(*compute.Operation)
-	if op.Error != nil {
-		// The resource didn't actually create
-		d.SetId("")
-
-		// Return the error
-		return OperationError(*op.Error)
+		return err
 	}
 
 	return resourceComputeNetworkRead(d, meta)
@@ -89,21 +123,22 @@ func resourceComputeNetworkCreate(d *schema.ResourceData, meta interface{}) erro
 func resourceComputeNetworkRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
-	network, err := config.clientCompute.Networks.Get(
-		config.Project, d.Id()).Do()
+	project, err := getProject(d, config)
 	if err != nil {
-		if gerr, ok := err.(*googleapi.Error); ok && gerr.Code == 404 {
-			// The resource doesn't exist anymore
-			d.SetId("")
+		return err
+	}
 
-			return nil
-		}
-
-		return fmt.Errorf("Error reading network: %s", err)
+	network, err := config.clientCompute.Networks.Get(
+		project, d.Id()).Do()
+	if err != nil {
+		return handleNotFoundError(err, d, fmt.Sprintf("Network %q", d.Get("name").(string)))
 	}
 
 	d.Set("gateway_ipv4", network.GatewayIPv4)
 	d.Set("self_link", network.SelfLink)
+	d.Set("ipv4_range", network.IPv4Range)
+	d.Set("name", network.Name)
+	d.Set("auto_create_subnetworks", network.AutoCreateSubnetworks)
 
 	return nil
 }
@@ -111,31 +146,21 @@ func resourceComputeNetworkRead(d *schema.ResourceData, meta interface{}) error 
 func resourceComputeNetworkDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
+
 	// Delete the network
 	op, err := config.clientCompute.Networks.Delete(
-		config.Project, d.Id()).Do()
+		project, d.Id()).Do()
 	if err != nil {
 		return fmt.Errorf("Error deleting network: %s", err)
 	}
 
-	// Wait for the operation to complete
-	w := &OperationWaiter{
-		Service: config.clientCompute,
-		Op:      op,
-		Project: config.Project,
-		Type:    OperationWaitGlobal,
-	}
-	state := w.Conf()
-	state.Timeout = 2 * time.Minute
-	state.MinTimeout = 1 * time.Second
-	opRaw, err := state.WaitForState()
+	err = computeOperationWaitGlobal(config, op, project, "Deleting Network")
 	if err != nil {
-		return fmt.Errorf("Error waiting for network to delete: %s", err)
-	}
-	op = opRaw.(*compute.Operation)
-	if op.Error != nil {
-		// Return the error
-		return OperationError(*op.Error)
+		return err
 	}
 
 	d.SetId("")

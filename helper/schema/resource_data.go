@@ -1,9 +1,11 @@
 package schema
 
 import (
+	"log"
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/terraform/terraform"
 )
@@ -18,10 +20,12 @@ import (
 // The most relevant methods to take a look at are Get, Set, and Partial.
 type ResourceData struct {
 	// Settable (internally)
-	schema map[string]*Schema
-	config *terraform.ResourceConfig
-	state  *terraform.InstanceState
-	diff   *terraform.InstanceDiff
+	schema   map[string]*Schema
+	config   *terraform.ResourceConfig
+	state    *terraform.InstanceState
+	diff     *terraform.InstanceDiff
+	meta     map[string]interface{}
+	timeouts *ResourceTimeout
 
 	// Don't set
 	multiReader *MultiLevelFieldReader
@@ -30,21 +34,8 @@ type ResourceData struct {
 	partial     bool
 	partialMap  map[string]struct{}
 	once        sync.Once
+	isNew       bool
 }
-
-// getSource represents the level we want to get for a value (internally).
-// Any source less than or equal to the level will be loaded (whichever
-// has a value first).
-type getSource byte
-
-const (
-	getSourceState getSource = 1 << iota
-	getSourceConfig
-	getSourceDiff
-	getSourceSet
-	getSourceExact               // Only get from the _exact_ level
-	getSourceLevelMask getSource = getSourceState | getSourceConfig | getSourceDiff | getSourceSet
-)
 
 // getResult is the internal structure that is generated when a Get
 // is called that contains some extra data that might be used.
@@ -56,7 +47,14 @@ type getResult struct {
 	Schema         *Schema
 }
 
-var getResultEmpty getResult
+// UnsafeSetFieldRaw allows setting arbitrary values in state to arbitrary
+// values, bypassing schema. This MUST NOT be used in normal circumstances -
+// it exists only to support the remote_state data source.
+func (d *ResourceData) UnsafeSetFieldRaw(key string, value string) {
+	d.once.Do(d.init)
+
+	d.setWriter.unsafeWriteField(key, value)
+}
 
 // Get returns the data for the given key, or nil if the key doesn't exist
 // in the schema.
@@ -79,18 +77,31 @@ func (d *ResourceData) Get(key string) interface{} {
 // set and the new value is. This is common, for example, for boolean
 // fields which have a zero value of false.
 func (d *ResourceData) GetChange(key string) (interface{}, interface{}) {
-	o, n := d.getChange(key, getSourceState, getSourceDiff|getSourceExact)
+	o, n := d.getChange(key, getSourceState, getSourceDiff)
 	return o.Value, n.Value
 }
 
 // GetOk returns the data for the given key and whether or not the key
-// has been set.
+// has been set to a non-zero value at some point.
 //
 // The first result will not necessarilly be nil if the value doesn't exist.
 // The second result should be checked to determine this information.
 func (d *ResourceData) GetOk(key string) (interface{}, bool) {
 	r := d.getRaw(key, getSourceSet)
-	return r.Value, r.Exists && !r.Computed
+	exists := r.Exists && !r.Computed
+	if exists {
+		// If it exists, we also want to verify it is not the zero-value.
+		value := r.Value
+		zero := r.Schema.Type.Zero()
+
+		if eq, ok := value.(Equal); ok {
+			exists = !eq.Equal(zero)
+		} else {
+			exists = !reflect.DeepEqual(value, zero)
+		}
+	}
+
+	return r.Value, exists
 }
 
 func (d *ResourceData) getRaw(key string, level getSource) getResult {
@@ -138,6 +149,25 @@ func (d *ResourceData) Partial(on bool) {
 // will be returned.
 func (d *ResourceData) Set(key string, value interface{}) error {
 	d.once.Do(d.init)
+
+	// If the value is a pointer to a non-struct, get its value and
+	// use that. This allows Set to take a pointer to primitives to
+	// simplify the interface.
+	reflectVal := reflect.ValueOf(value)
+	if reflectVal.Kind() == reflect.Ptr {
+		if reflectVal.IsNil() {
+			// If the pointer is nil, then the value is just nil
+			value = nil
+		} else {
+			// Otherwise, we dereference the pointer as long as its not
+			// a pointer to a struct, since struct pointers are allowed.
+			reflectVal = reflect.Indirect(reflectVal)
+			if reflectVal.Kind() != reflect.Struct {
+				value = reflectVal.Interface()
+			}
+		}
+	}
+
 	return d.setWriter.WriteField(strings.Split(key, "."), value)
 }
 
@@ -151,6 +181,14 @@ func (d *ResourceData) SetPartial(k string) {
 	if d.partial {
 		d.partialMap[k] = struct{}{}
 	}
+}
+
+func (d *ResourceData) MarkNewResource() {
+	d.isNew = true
+}
+
+func (d *ResourceData) IsNewResource() bool {
+	return d.isNew
 }
 
 // Id returns the ID of the resource.
@@ -194,11 +232,19 @@ func (d *ResourceData) SetConnInfo(v map[string]string) {
 	d.newState.Ephemeral.ConnInfo = v
 }
 
+// SetType sets the ephemeral type for the data. This is only required
+// for importing.
+func (d *ResourceData) SetType(t string) {
+	d.once.Do(d.init)
+	d.newState.Ephemeral.Type = t
+}
+
 // State returns the new InstanceState after the diff and any Set
 // calls.
 func (d *ResourceData) State() *terraform.InstanceState {
 	var result terraform.InstanceState
 	result.ID = d.Id()
+	result.Meta = d.meta
 
 	// If we have no ID, then this resource doesn't exist and we just
 	// return nil.
@@ -206,11 +252,28 @@ func (d *ResourceData) State() *terraform.InstanceState {
 		return nil
 	}
 
+	if d.timeouts != nil {
+		if err := d.timeouts.StateEncode(&result); err != nil {
+			log.Printf("[ERR] Error encoding Timeout meta to Instance State: %s", err)
+		}
+	}
+
+	// Look for a magic key in the schema that determines we skip the
+	// integrity check of fields existing in the schema, allowing dynamic
+	// keys to be created.
+	hasDynamicAttributes := false
+	for k, _ := range d.schema {
+		if k == "__has_dynamic_attributes" {
+			hasDynamicAttributes = true
+			log.Printf("[INFO] Resource %s has dynamic attributes", result.ID)
+		}
+	}
+
 	// In order to build the final state attributes, we read the full
 	// attribute set as a map[string]interface{}, write it to a MapFieldWriter,
 	// and then use that map.
 	rawMap := make(map[string]interface{})
-	for k, _ := range d.schema {
+	for k := range d.schema {
 		source := getSourceSet
 		if d.partial {
 			source = getSourceState
@@ -227,13 +290,30 @@ func (d *ResourceData) State() *terraform.InstanceState {
 			}
 		}
 	}
+
 	mapW := &MapFieldWriter{Schema: d.schema}
 	if err := mapW.WriteField(nil, rawMap); err != nil {
 		return nil
 	}
 
 	result.Attributes = mapW.Map()
-	result.Ephemeral.ConnInfo = d.ConnInfo()
+
+	if hasDynamicAttributes {
+		// If we have dynamic attributes, just copy the attributes map
+		// one for one into the result attributes.
+		for k, v := range d.setWriter.Map() {
+			// Don't clobber schema values. This limits usage of dynamic
+			// attributes to names which _do not_ conflict with schema
+			// keys!
+			if _, ok := result.Attributes[k]; !ok {
+				result.Attributes[k] = v
+			}
+		}
+	}
+
+	if d.newState != nil {
+		result.Ephemeral = d.newState.Ephemeral
+	}
 
 	// TODO: This is hacky and we can remove this when we have a proper
 	// state writer. We should instead have a proper StateFieldWriter
@@ -252,14 +332,47 @@ func (d *ResourceData) State() *terraform.InstanceState {
 		result.Attributes["id"] = d.Id()
 	}
 
+	if d.state != nil {
+		result.Tainted = d.state.Tainted
+	}
+
 	return &result
+}
+
+// Timeout returns the data for the given timeout key
+// Returns a duration of 20 minutes for any key not found, or not found and no default.
+func (d *ResourceData) Timeout(key string) time.Duration {
+	key = strings.ToLower(key)
+
+	var timeout *time.Duration
+	switch key {
+	case TimeoutCreate:
+		timeout = d.timeouts.Create
+	case TimeoutRead:
+		timeout = d.timeouts.Read
+	case TimeoutUpdate:
+		timeout = d.timeouts.Update
+	case TimeoutDelete:
+		timeout = d.timeouts.Delete
+	}
+
+	if timeout != nil {
+		return *timeout
+	}
+
+	if d.timeouts.Default != nil {
+		return *d.timeouts.Default
+	}
+
+	// Return system default of 20 minutes
+	return 20 * time.Minute
 }
 
 func (d *ResourceData) init() {
 	// Initialize the field that will store our new state
 	var copyState terraform.InstanceState
 	if d.state != nil {
-		copyState = *d.state
+		copyState = *d.state.DeepCopy()
 	}
 	d.newState = &copyState
 
@@ -325,13 +438,13 @@ func (d *ResourceData) diffChange(
 }
 
 func (d *ResourceData) getChange(
-	key string,
+	k string,
 	oldLevel getSource,
 	newLevel getSource) (getResult, getResult) {
 	var parts, parts2 []string
-	if key != "" {
-		parts = strings.Split(key, ".")
-		parts2 = strings.Split(key, ".")
+	if k != "" {
+		parts = strings.Split(k, ".")
+		parts2 = strings.Split(k, ".")
 	}
 
 	o := d.get(parts, oldLevel)
@@ -356,13 +469,6 @@ func (d *ResourceData) get(addr []string, source getSource) getResult {
 		level = "state"
 	}
 
-	// Build the address of the key we're looking for and ask the FieldReader
-	for i, v := range addr {
-		if v[0] == '~' {
-			addr[i] = v[1:]
-		}
-	}
-
 	var result FieldReadResult
 	var err error
 	if exact {
@@ -375,11 +481,13 @@ func (d *ResourceData) get(addr []string, source getSource) getResult {
 	}
 
 	// If the result doesn't exist, then we set the value to the zero value
-	if result.Value == nil {
-		if schemaL := addrToSchema(addr, d.schema); len(schemaL) > 0 {
-			schema := schemaL[len(schemaL)-1]
-			result.Value = result.ValueOrZero(schema)
-		}
+	var schema *Schema
+	if schemaL := addrToSchema(addr, d.schema); len(schemaL) > 0 {
+		schema = schemaL[len(schemaL)-1]
+	}
+
+	if result.Value == nil && schema != nil {
+		result.Value = result.ValueOrZero(schema)
 	}
 
 	// Transform the FieldReadResult into a getResult. It might be worth
@@ -389,5 +497,6 @@ func (d *ResourceData) get(addr []string, source getSource) getResult {
 		ValueProcessed: result.ValueProcessed,
 		Computed:       result.Computed,
 		Exists:         result.Exists,
+		Schema:         schema,
 	}
 }

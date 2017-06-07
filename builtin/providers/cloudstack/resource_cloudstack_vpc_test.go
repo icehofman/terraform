@@ -72,8 +72,12 @@ func testAccCheckCloudStackVPCAttributes(
 			return fmt.Errorf("Bad display text: %s", vpc.Displaytext)
 		}
 
-		if vpc.Cidr != CLOUDSTACK_VPC_CIDR {
-			return fmt.Errorf("Bad VPC offering: %s", vpc.Cidr)
+		if vpc.Cidr != CLOUDSTACK_VPC_CIDR_1 {
+			return fmt.Errorf("Bad VPC CIDR: %s", vpc.Cidr)
+		}
+
+		if vpc.Networkdomain != "terraform-domain" {
+			return fmt.Errorf("Bad network domain: %s", vpc.Networkdomain)
 		}
 
 		return nil
@@ -92,13 +96,9 @@ func testAccCheckCloudStackVPCDestroy(s *terraform.State) error {
 			return fmt.Errorf("No VPC ID is set")
 		}
 
-		p := cs.VPC.NewDeleteVPCParams(rs.Primary.ID)
-		_, err := cs.VPC.DeleteVPC(p)
-
-		if err != nil {
-			return fmt.Errorf(
-				"Error deleting VPC (%s): %s",
-				rs.Primary.ID, err)
+		_, _, err := cs.VPC.GetVPCByID(rs.Primary.ID)
+		if err == nil {
+			return fmt.Errorf("VPC %s still exists", rs.Primary.ID)
 		}
 	}
 
@@ -111,8 +111,9 @@ resource "cloudstack_vpc" "foo" {
   display_text = "terraform-vpc-text"
   cidr = "%s"
   vpc_offering = "%s"
+  network_domain = "terraform-domain"
   zone = "%s"
 }`,
-	CLOUDSTACK_VPC_CIDR,
+	CLOUDSTACK_VPC_CIDR_1,
 	CLOUDSTACK_VPC_OFFERING,
 	CLOUDSTACK_ZONE)

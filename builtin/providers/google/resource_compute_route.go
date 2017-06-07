@@ -3,12 +3,9 @@ package google
 import (
 	"fmt"
 	"log"
-	"time"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
-	"code.google.com/p/google-api-go-client/googleapi"
-	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/schema"
+	"google.golang.org/api/compute/v1"
 )
 
 func resourceComputeRoute() *schema.Resource {
@@ -16,15 +13,18 @@ func resourceComputeRoute() *schema.Resource {
 		Create: resourceComputeRouteCreate,
 		Read:   resourceComputeRouteRead,
 		Delete: resourceComputeRouteDelete,
+		Importer: &schema.ResourceImporter{
+			State: schema.ImportStatePassthrough,
+		},
 
 		Schema: map[string]*schema.Schema{
-			"name": &schema.Schema{
+			"dest_range": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"dest_range": &schema.Schema{
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -36,7 +36,13 @@ func resourceComputeRoute() *schema.Resource {
 				ForceNew: true,
 			},
 
-			"next_hop_ip": &schema.Schema{
+			"priority": &schema.Schema{
+				Type:     schema.TypeInt,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"next_hop_gateway": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
@@ -54,7 +60,7 @@ func resourceComputeRoute() *schema.Resource {
 				ForceNew: true,
 			},
 
-			"next_hop_gateway": &schema.Schema{
+			"next_hop_ip": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
@@ -62,28 +68,32 @@ func resourceComputeRoute() *schema.Resource {
 
 			"next_hop_network": &schema.Schema{
 				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"next_hop_vpn_tunnel": &schema.Schema{
+				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
 			},
 
-			"priority": &schema.Schema{
-				Type:     schema.TypeInt,
-				Required: true,
-				ForceNew: true,
-			},
-
-			"tags": &schema.Schema{
-				Type:     schema.TypeSet,
+			"project": &schema.Schema{
+				Type:     schema.TypeString,
 				Optional: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
-				Set: func(v interface{}) int {
-					return hashcode.String(v.(string))
-				},
+				ForceNew: true,
 			},
 
 			"self_link": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
+			},
+
+			"tags": &schema.Schema{
+				Type:     schema.TypeSet,
+				Optional: true,
+				ForceNew: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+				Set:      schema.HashString,
 			},
 		},
 	}
@@ -92,24 +102,36 @@ func resourceComputeRoute() *schema.Resource {
 func resourceComputeRouteCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
+
 	// Look up the network to attach the route to
-	network, err := config.clientCompute.Networks.Get(
-		config.Project, d.Get("network").(string)).Do()
+	network, err := getNetworkLink(d, config, "network")
 	if err != nil {
 		return fmt.Errorf("Error reading network: %s", err)
 	}
 
 	// Next hop data
-	var nextHopInstance, nextHopIp, nextHopNetwork, nextHopGateway string
+	var nextHopInstance, nextHopIp, nextHopGateway,
+		nextHopVpnTunnel string
 	if v, ok := d.GetOk("next_hop_ip"); ok {
 		nextHopIp = v.(string)
 	}
 	if v, ok := d.GetOk("next_hop_gateway"); ok {
-		nextHopGateway = v.(string)
+		if v == "default-internet-gateway" {
+			nextHopGateway = fmt.Sprintf("projects/%s/global/gateways/default-internet-gateway", project)
+		} else {
+			nextHopGateway = v.(string)
+		}
+	}
+	if v, ok := d.GetOk("next_hop_vpn_tunnel"); ok {
+		nextHopVpnTunnel = v.(string)
 	}
 	if v, ok := d.GetOk("next_hop_instance"); ok {
 		nextInstance, err := config.clientCompute.Instances.Get(
-			config.Project,
+			project,
 			d.Get("next_hop_instance_zone").(string),
 			v.(string)).Do()
 		if err != nil {
@@ -117,15 +139,6 @@ func resourceComputeRouteCreate(d *schema.ResourceData, meta interface{}) error 
 		}
 
 		nextHopInstance = nextInstance.SelfLink
-	}
-	if v, ok := d.GetOk("next_hop_network"); ok {
-		nextNetwork, err := config.clientCompute.Networks.Get(
-			config.Project, v.(string)).Do()
-		if err != nil {
-			return fmt.Errorf("Error reading network: %s", err)
-		}
-
-		nextHopNetwork = nextNetwork.SelfLink
 	}
 
 	// Tags
@@ -139,19 +152,19 @@ func resourceComputeRouteCreate(d *schema.ResourceData, meta interface{}) error 
 
 	// Build the route parameter
 	route := &compute.Route{
-		Name:            d.Get("name").(string),
-		DestRange:       d.Get("dest_range").(string),
-		Network:         network.SelfLink,
-		NextHopInstance: nextHopInstance,
-		NextHopIp:       nextHopIp,
-		NextHopNetwork:  nextHopNetwork,
-		NextHopGateway:  nextHopGateway,
-		Priority:        int64(d.Get("priority").(int)),
-		Tags:            tags,
+		Name:             d.Get("name").(string),
+		DestRange:        d.Get("dest_range").(string),
+		Network:          network,
+		NextHopInstance:  nextHopInstance,
+		NextHopVpnTunnel: nextHopVpnTunnel,
+		NextHopIp:        nextHopIp,
+		NextHopGateway:   nextHopGateway,
+		Priority:         int64(d.Get("priority").(int)),
+		Tags:             tags,
 	}
 	log.Printf("[DEBUG] Route insert request: %#v", route)
 	op, err := config.clientCompute.Routes.Insert(
-		config.Project, route).Do()
+		project, route).Do()
 	if err != nil {
 		return fmt.Errorf("Error creating route: %s", err)
 	}
@@ -159,27 +172,9 @@ func resourceComputeRouteCreate(d *schema.ResourceData, meta interface{}) error 
 	// It probably maybe worked, so store the ID now
 	d.SetId(route.Name)
 
-	// Wait for the operation to complete
-	w := &OperationWaiter{
-		Service: config.clientCompute,
-		Op:      op,
-		Project: config.Project,
-		Type:    OperationWaitGlobal,
-	}
-	state := w.Conf()
-	state.Timeout = 2 * time.Minute
-	state.MinTimeout = 1 * time.Second
-	opRaw, err := state.WaitForState()
+	err = computeOperationWaitGlobal(config, op, project, "Creating Route")
 	if err != nil {
-		return fmt.Errorf("Error waiting for route to create: %s", err)
-	}
-	op = opRaw.(*compute.Operation)
-	if op.Error != nil {
-		// The resource didn't actually create
-		d.SetId("")
-
-		// Return the error
-		return OperationError(*op.Error)
+		return err
 	}
 
 	return resourceComputeRouteRead(d, meta)
@@ -188,19 +183,18 @@ func resourceComputeRouteCreate(d *schema.ResourceData, meta interface{}) error 
 func resourceComputeRouteRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
-	route, err := config.clientCompute.Routes.Get(
-		config.Project, d.Id()).Do()
+	project, err := getProject(d, config)
 	if err != nil {
-		if gerr, ok := err.(*googleapi.Error); ok && gerr.Code == 404 {
-			// The resource doesn't exist anymore
-			d.SetId("")
-
-			return nil
-		}
-
-		return fmt.Errorf("Error reading route: %#v", err)
+		return err
 	}
 
+	route, err := config.clientCompute.Routes.Get(
+		project, d.Id()).Do()
+	if err != nil {
+		return handleNotFoundError(err, d, fmt.Sprintf("Route %q", d.Get("name").(string)))
+	}
+
+	d.Set("next_hop_network", route.NextHopNetwork)
 	d.Set("self_link", route.SelfLink)
 
 	return nil
@@ -209,31 +203,21 @@ func resourceComputeRouteRead(d *schema.ResourceData, meta interface{}) error {
 func resourceComputeRouteDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
+
 	// Delete the route
 	op, err := config.clientCompute.Routes.Delete(
-		config.Project, d.Id()).Do()
+		project, d.Id()).Do()
 	if err != nil {
 		return fmt.Errorf("Error deleting route: %s", err)
 	}
 
-	// Wait for the operation to complete
-	w := &OperationWaiter{
-		Service: config.clientCompute,
-		Op:      op,
-		Project: config.Project,
-		Type:    OperationWaitGlobal,
-	}
-	state := w.Conf()
-	state.Timeout = 2 * time.Minute
-	state.MinTimeout = 1 * time.Second
-	opRaw, err := state.WaitForState()
+	err = computeOperationWaitGlobal(config, op, project, "Deleting Route")
 	if err != nil {
-		return fmt.Errorf("Error waiting for route to delete: %s", err)
-	}
-	op = opRaw.(*compute.Operation)
-	if op.Error != nil {
-		// Return the error
-		return OperationError(*op.Error)
+		return err
 	}
 
 	d.SetId("")

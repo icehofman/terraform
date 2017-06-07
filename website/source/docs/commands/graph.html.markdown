@@ -16,17 +16,29 @@ The output is in the DOT format, which can be used by
 
 ## Usage
 
-Usage: `terraform graph [options] PATH`
+Usage: `terraform graph [options] [DIR]`
 
-Outputs the visual graph of Terraform resources. If the path given is
-the path to a configuration, the dependency graph of the resources are
-shown. If the path is a plan file, then the dependency graph of the
-plan itself is shown.
+Outputs the visual dependency graph of Terraform resources according to
+configuration files in DIR (or the current directory if omitted).
+
+The graph is outputted in DOT format. The typical program that can
+read this format is GraphViz, but many web services are also available
+to read this format.
+
+The -type flag can be used to control the type of graph shown. Terraform
+creates different graphs for different operations. See the options below
+for the list of types supported. The default type is "plan" if a
+configuration is given, and "apply" if a plan file is passed as an
+argument.
 
 Options:
 
-* `-module-depth=n` - The maximum depth to expand modules. By default this is
-                      zero, which will not expand modules at all.
+* `-draw-cycles`    - Highlight any cycles in the graph with colored edges.
+                      This helps when diagnosing cycle errors.
+
+* `-no-color`       - If specified, output won't contain any color.
+
+* `-type=plan`      - Type of graph to output. Can be: plan, plan-destroy, apply, legacy.
 
 ## Generating Images
 
@@ -34,13 +46,9 @@ The output of `terraform graph` is in the DOT format, which can
 easily be converted to an image by making use of `dot` provided
 by GraphViz:
 
-```
+```shell
 $ terraform graph | dot -Tpng > graph.png
 ```
 
-Alternatively, the web-based [GraphViz Workspace](http://graphviz-dev.appspot.com)
-can be used to quickly render DOT file inputs as well.
-
 Here is an example graph output:
-![Graph Example](graph-example.png)
-
+![Graph Example](docs/graph-example.png)

@@ -12,6 +12,9 @@ func TestAppend(t *testing.T) {
 	}{
 		{
 			&Config{
+				Atlas: &AtlasConfig{
+					Name: "foo",
+				},
 				Modules: []*Module{
 					&Module{Name: "foo"},
 				},
@@ -32,6 +35,9 @@ func TestAppend(t *testing.T) {
 			},
 
 			&Config{
+				Atlas: &AtlasConfig{
+					Name: "bar",
+				},
 				Modules: []*Module{
 					&Module{Name: "bar"},
 				},
@@ -52,6 +58,9 @@ func TestAppend(t *testing.T) {
 			},
 
 			&Config{
+				Atlas: &AtlasConfig{
+					Name: "bar",
+				},
 				Modules: []*Module{
 					&Module{Name: "foo"},
 					&Module{Name: "bar"},
@@ -78,11 +87,67 @@ func TestAppend(t *testing.T) {
 
 			false,
 		},
+
+		// Terraform block
+		{
+			&Config{
+				Terraform: &Terraform{
+					RequiredVersion: "A",
+				},
+			},
+			&Config{},
+			&Config{
+				Terraform: &Terraform{
+					RequiredVersion: "A",
+				},
+			},
+			false,
+		},
+
+		{
+			&Config{},
+			&Config{
+				Terraform: &Terraform{
+					RequiredVersion: "A",
+				},
+			},
+			&Config{
+				Terraform: &Terraform{
+					RequiredVersion: "A",
+				},
+			},
+			false,
+		},
+
+		// appending configs merges terraform blocks
+		{
+			&Config{
+				Terraform: &Terraform{
+					RequiredVersion: "A",
+				},
+			},
+			&Config{
+				Terraform: &Terraform{
+					Backend: &Backend{
+						Type: "test",
+					},
+				},
+			},
+			&Config{
+				Terraform: &Terraform{
+					RequiredVersion: "A",
+					Backend: &Backend{
+						Type: "test",
+					},
+				},
+			},
+			false,
+		},
 	}
 
 	for i, tc := range cases {
 		actual, err := Append(tc.c1, tc.c2)
-		if (err != nil) != tc.err {
+		if err != nil != tc.err {
 			t.Fatalf("%d: error fail", i)
 		}
 

@@ -6,7 +6,7 @@ description: |-
   The Mailgun provider is used to interact with the resources supported by Mailgun. The provider needs to be configured with the proper credentials before it can be used.
 ---
 
-#  Provider
+# Mailgun Provider
 
 The Mailgun provider is used to interact with the
 resources supported by Mailgun. The provider needs to be configured
@@ -16,15 +16,15 @@ Use the navigation to the left to read about the available resources.
 
 ## Example Usage
 
-```
+```hcl
 # Configure the Mailgun provider
 provider "mailgun" {
-	api_key = "${var.mailgun_api_key}"
+  api_key = "${var.mailgun_api_key}"
 }
 
 # Create a new domain
 resource "mailgun_domain" "default" {
-    ...
+  # ...
 }
 ```
 

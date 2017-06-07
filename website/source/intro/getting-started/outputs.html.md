@@ -29,13 +29,13 @@ Let's define an output to show us the public IP address of the
 elastic IP address that we create. Add this to any of your
 `*.tf` files:
 
-```
+```hcl
 output "ip" {
-	value = "${aws_eip.ip.public_ip}"
+  value = "${aws_eip.ip.public_ip}"
 }
 ```
 
-This defines an output variables named "ip". The `value` field
+This defines an output variable named "ip". The `value` field
 specifies what the value will be, and almost always contains
 one or more interpolations, since the output data is typically
 dynamic. In this case, we're outputting the

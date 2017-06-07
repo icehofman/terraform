@@ -28,7 +28,7 @@ func TestMapFieldReader(t *testing.T) {
 				"listInt.0": "21",
 				"listInt.1": "42",
 
-				"map.#":   "2",
+				"map.%":   "2",
 				"map.foo": "bar",
 				"map.bar": "baz",
 
@@ -41,6 +41,17 @@ func TestMapFieldReader(t *testing.T) {
 				"setDeep.10.value": "foo",
 				"setDeep.50.index": "50",
 				"setDeep.50.value": "bar",
+
+				"mapInt.%":   "2",
+				"mapInt.one": "1",
+				"mapInt.two": "2",
+
+				"mapFloat.%":         "1",
+				"mapFloat.oneDotTwo": "1.2",
+
+				"mapBool.%":     "2",
+				"mapBool.True":  "true",
+				"mapBool.False": "false",
 			}),
 		}
 	})
@@ -49,11 +60,14 @@ func TestMapFieldReader(t *testing.T) {
 func TestMapFieldReader_extra(t *testing.T) {
 	r := &MapFieldReader{
 		Schema: map[string]*Schema{
-			"mapDel": &Schema{Type: TypeMap},
+			"mapDel":   &Schema{Type: TypeMap},
+			"mapEmpty": &Schema{Type: TypeMap},
 		},
 
 		Map: BasicMapReader(map[string]string{
 			"mapDel": "",
+
+			"mapEmpty.%": "0",
 		}),
 	}
 
@@ -71,11 +85,19 @@ func TestMapFieldReader_extra(t *testing.T) {
 			false,
 			false,
 		},
+
+		"mapEmpty": {
+			[]string{"mapEmpty"},
+			map[string]interface{}{},
+			true,
+			false,
+			false,
+		},
 	}
 
 	for name, tc := range cases {
 		out, err := r.ReadField(tc.Addr)
-		if (err != nil) != tc.OutErr {
+		if err != nil != tc.OutErr {
 			t.Fatalf("%s: err: %s", name, err)
 		}
 		if out.Computed != tc.OutComputed {

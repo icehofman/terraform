@@ -22,7 +22,7 @@ Writing modules is covered in more detail in the
 [modules documentation](/docs/modules/index.html).
 
 ~> **Warning!** The examples on this page are _**not** eligible_ for the AWS
-[free-tier](http://aws.amazon.com/free/). Do not execute the examples on this
+[free-tier](https://aws.amazon.com/free/). Do not execute the examples on this
 page unless you're willing to spend a small amount of money.
 
 ## Using Modules
@@ -32,22 +32,32 @@ started guide, use `terraform destroy` to destroy them, and remove all
 configuration files.
 
 As an example, we're going to use the
-[Consul Terraform module](#)
+[Consul Terraform module](https://github.com/hashicorp/consul/tree/master/terraform)
 which will setup a complete [Consul](https://www.consul.io) cluster
 for us.
 
 Create a configuration file with the following contents:
 
-```
-module "consul" {
-	source = "github.com/hashicorp/consul/terraform/aws"
+```hcl
+provider "aws" {
+  access_key = "AWS ACCESS KEY"
+  secret_key = "AWS SECRET KEY"
+  region     = "AWS REGION"
+}
 
-	key_name = "AWS SSH KEY NAME"
-	key_path = "PATH TO ABOVE PRIVATE KEY"
-	region = "AWS REGION"
-	servers = "3"
+module "consul" {
+  source = "github.com/hashicorp/consul/terraform/aws"
+
+  key_name = "AWS SSH KEY NAME"
+  key_path = "PATH TO ABOVE PRIVATE KEY"
+  region   = "us-east-1"
+  servers  = "3"
 }
 ```
+
+(Note that the `provider` block can be omitted in favor of environment
+variables. See the [AWS Provider docs](/docs/providers/aws/index.html)
+for details.  This module requires that your AWS account has a default VPC.)
 
 The `module` block tells Terraform to create and manage a module. It is
 very similar to the `resource` block. It has a logical name -- in this
@@ -68,12 +78,12 @@ This is done using the [get command](/docs/commands/get.html).
 
 ```
 $ terraform get
-...
+# ...
 ```
 
 This command will download the modules if they haven't been already.
 By default, the command will not check for updates, so it is safe (and fast)
-to run multiple times. You can use the `-u` flag to check and download
+to run multiple times. You can use the `-update` flag to check and download
 updates.
 
 ## Planning and Apply Modules
@@ -83,13 +93,24 @@ With the modules downloaded, we can now plan and apply it. If you run
 
 ```
 $ terraform plan
-TODO
+# ...
++ module.consul.aws_instance.server.0
+# ...
++ module.consul.aws_instance.server.1
+# ...
++ module.consul.aws_instance.server.2
+# ...
++ module.consul.aws_security_group.consul
+# ...
+
+Plan: 4 to add, 0 to change, 0 to destroy.
 ```
 
-As you can see, the module is treated like a black box. In the plan, Terraform
-shows the module managed as a whole. It does not show what resources within
-the module will be created. If you care, you can see that by specifying
-a `-module-depth=-1` flag.
+Conceptually, the module is treated like a black box. In the plan, however
+Terraform shows each resource the module manages so you can see each detail
+about what the plan will do. If you'd like compressed plan output, you can
+specify the `-module-depth=` flag to get Terraform to output summaries by
+module.
 
 Next, run `terraform apply` to create the module. Note that as we warned above,
 the resources this module creates are outside of the AWS free tier, so this
@@ -97,7 +118,8 @@ will have some cost associated with it.
 
 ```
 $ terraform apply
-TODO
+# ...
+Apply complete! Resources: 3 added, 0 changed, 0 destroyed.
 ```
 
 After a few minutes, you'll have a three server Consul cluster up and
@@ -119,9 +141,9 @@ To reference this, we'll just put it into our own output variable. But this
 value could be used anywhere: in another resource, to configure another
 provider, etc.
 
-```
+```hcl
 output "consul_address" {
-	value = "${module.consul.server_address}"
+  value = "${module.consul.server_address}"
 }
 ```
 
@@ -139,6 +161,4 @@ For more information on modules, the types of sources supported, how
 to write modules, and more, read the in depth
 [module documentation](/docs/modules/index.html).
 
-We've now concluded the getting started guide, however
-there are a number of [next steps](/intro/getting-started/next-steps.html)
-to get started with Terraform.
+Next, we learn how to [use Terraform remotely and the associated benefits](/intro/getting-started/remote.html).

@@ -1,6 +1,22 @@
+terraform {
+    required_version = "foo"
+}
+
 variable "foo" {
     default = "bar"
     description = "bar"
+}
+
+variable "bar" {
+    type = "string"
+}
+
+variable "baz" {
+    type = "map"
+
+    default = {
+        key = "value"
+    }
 }
 
 provider "aws" {
@@ -10,6 +26,14 @@ provider "aws" {
 
 provider "do" {
   api_key = "${var.foo}"
+}
+
+data "do" "simple" {
+    foo = "baz"
+}
+
+data "do" "depends" {
+    depends_on = ["data.do.simple"]
 }
 
 resource "aws_security_group" "firewall" {
@@ -48,4 +72,8 @@ resource "aws_instance" "db" {
 
 output "web_ip" {
     value = "${aws_instance.web.private_ip}"
+}
+
+atlas {
+    name = "mitchellh/foo"
 }

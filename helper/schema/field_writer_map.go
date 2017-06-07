@@ -29,6 +29,16 @@ func (w *MapFieldWriter) Map() map[string]string {
 	return w.result
 }
 
+func (w *MapFieldWriter) unsafeWriteField(addr string, value string) {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	if w.result == nil {
+		w.result = make(map[string]string)
+	}
+
+	w.result[addr] = value
+}
+
 func (w *MapFieldWriter) WriteField(addr []string, value interface{}) error {
 	w.lock.Lock()
 	defer w.lock.Unlock()
@@ -74,13 +84,7 @@ func (w *MapFieldWriter) set(addr []string, value interface{}) error {
 
 	schema := schemaList[len(schemaList)-1]
 	switch schema.Type {
-	case TypeBool:
-		fallthrough
-	case TypeInt:
-		fallthrough
-	case TypeFloat:
-		fallthrough
-	case TypeString:
+	case TypeBool, TypeInt, TypeFloat, TypeString:
 		return w.setPrimitive(addr, value, schema)
 	case TypeList:
 		return w.setList(addr, value, schema)
@@ -141,23 +145,21 @@ func (w *MapFieldWriter) setMap(
 	v := reflect.ValueOf(value)
 	vs := make(map[string]interface{})
 
-	if value != nil {
-		if v.Kind() != reflect.Map {
-			return fmt.Errorf("%s: must be a map", k)
-		}
-		if v.Type().Key().Kind() != reflect.String {
-			return fmt.Errorf("%s: keys must strings", k)
-		}
-		for _, mk := range v.MapKeys() {
-			mv := v.MapIndex(mk)
-			vs[mk.String()] = mv.Interface()
-		}
-	}
-
-	if len(vs) == 0 {
+	if value == nil {
 		// The empty string here means the map is removed.
 		w.result[k] = ""
 		return nil
+	}
+
+	if v.Kind() != reflect.Map {
+		return fmt.Errorf("%s: must be a map", k)
+	}
+	if v.Type().Key().Kind() != reflect.String {
+		return fmt.Errorf("%s: keys must strings", k)
+	}
+	for _, mk := range v.MapKeys() {
+		mv := v.MapIndex(mk)
+		vs[mk.String()] = mv.Interface()
 	}
 
 	// Remove the pure key since we're setting the full map value
@@ -173,7 +175,7 @@ func (w *MapFieldWriter) setMap(
 	}
 
 	// Set the count
-	w.result[k+".#"] = strconv.Itoa(len(vs))
+	w.result[k+".%"] = strconv.Itoa(len(vs))
 
 	return nil
 }
@@ -215,7 +217,8 @@ func (w *MapFieldWriter) setPrimitive(
 	k := strings.Join(addr, ".")
 
 	if v == nil {
-		delete(w.result, k)
+		// The empty string here means the value is removed.
+		w.result[k] = ""
 		return nil
 	}
 
@@ -284,7 +287,7 @@ func (w *MapFieldWriter) setSet(
 		// not the `value` directly is because this forces all types
 		// to become []interface{} (generic) instead of []string, which
 		// most hash functions are expecting.
-		s := &Set{F: schema.Set}
+		s := schema.ZeroValue().(*Set)
 		tempR := &MapFieldReader{
 			Map:    BasicMapReader(tempW.Map()),
 			Schema: tempSchemaMap,
@@ -306,8 +309,7 @@ func (w *MapFieldWriter) setSet(
 	}
 
 	for code, elem := range value.(*Set).m {
-		codeStr := strconv.FormatInt(int64(code), 10)
-		if err := w.set(append(addrCopy, codeStr), elem); err != nil {
+		if err := w.set(append(addrCopy, code), elem); err != nil {
 			return err
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform/config/module"
@@ -121,6 +122,36 @@ func TestShow_plan(t *testing.T) {
 	}
 	if code := c.Run(args); code != 0 {
 		t.Fatalf("bad: \n%s", ui.ErrorWriter.String())
+	}
+}
+
+func TestShow_noArgsRemoteState(t *testing.T) {
+	tmp, cwd := testCwd(t)
+	defer testFixCwd(t, tmp, cwd)
+
+	// Create some legacy remote state
+	legacyState := testState()
+	_, srv := testRemoteState(t, legacyState, 200)
+	defer srv.Close()
+	testStateFileRemote(t, legacyState)
+
+	ui := new(cli.MockUi)
+	c := &ShowCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(testProvider()),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: \n%s", ui.OutputWriter.String())
+	}
+
+	expected := "test_instance.foo"
+	actual := ui.OutputWriter.String()
+	if !strings.Contains(actual, expected) {
+		t.Fatalf("expected:\n%s\n\nto include: %q", actual, expected)
 	}
 }
 

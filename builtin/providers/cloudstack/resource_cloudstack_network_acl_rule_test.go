@@ -21,21 +21,33 @@ func TestAccCloudStackNetworkACLRule_basic(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackNetworkACLRulesExist("cloudstack_network_acl.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.#", "1"),
+						"cloudstack_network_acl_rule.foo", "rule.#", "3"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.action", "allow"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.action", "allow"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.source_cidr", "172.16.100.0/24"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.cidr_list.2835005819", "172.16.100.0/24"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.protocol", "tcp"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.protocol", "tcp"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.#", "2"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.ports.#", "2"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.1889509032", "80"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.ports.1889509032", "80"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.3638101695", "443"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.ports.3638101695", "443"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.traffic_type", "ingress"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.traffic_type", "ingress"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.action", "allow"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.cidr_list.#", "1"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.cidr_list.3056857544", "172.18.100.0/24"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.icmp_code", "-1"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.icmp_type", "-1"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.traffic_type", "ingress"),
 				),
 			},
 		},
@@ -53,21 +65,33 @@ func TestAccCloudStackNetworkACLRule_update(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackNetworkACLRulesExist("cloudstack_network_acl.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.#", "1"),
+						"cloudstack_network_acl_rule.foo", "rule.#", "3"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.action", "allow"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.action", "allow"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.source_cidr", "172.16.100.0/24"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.cidr_list.2835005819", "172.16.100.0/24"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.protocol", "tcp"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.protocol", "tcp"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.#", "2"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.ports.#", "2"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.1889509032", "80"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.ports.1889509032", "80"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.3638101695", "443"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.ports.3638101695", "443"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.traffic_type", "ingress"),
+						"cloudstack_network_acl_rule.foo", "rule.2898748868.traffic_type", "ingress"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.action", "allow"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.cidr_list.#", "1"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.cidr_list.3056857544", "172.18.100.0/24"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.icmp_code", "-1"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.icmp_type", "-1"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.1480917538.traffic_type", "ingress"),
 				),
 			},
 
@@ -76,35 +100,49 @@ func TestAccCloudStackNetworkACLRule_update(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackNetworkACLRulesExist("cloudstack_network_acl.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.#", "2"),
+						"cloudstack_network_acl_rule.foo", "rule.#", "4"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.action", "allow"),
+						"cloudstack_network_acl_rule.foo", "rule.1724235854.action", "deny"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.source_cidr", "172.16.100.0/24"),
+						"cloudstack_network_acl_rule.foo", "rule.1724235854.cidr_list.3482919157", "10.0.0.0/24"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.protocol", "tcp"),
+						"cloudstack_network_acl_rule.foo", "rule.1724235854.protocol", "tcp"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.#", "2"),
+						"cloudstack_network_acl_rule.foo", "rule.1724235854.ports.#", "2"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.1889509032", "80"),
+						"cloudstack_network_acl_rule.foo", "rule.1724235854.ports.1209010669", "1000-2000"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.ports.3638101695", "443"),
+						"cloudstack_network_acl_rule.foo", "rule.1724235854.ports.1889509032", "80"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.3247834462.traffic_type", "ingress"),
+						"cloudstack_network_acl_rule.foo", "rule.1724235854.traffic_type", "egress"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.4267872693.action", "deny"),
+						"cloudstack_network_acl_rule.foo", "rule.2090315355.action", "deny"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.4267872693.source_cidr", "10.0.0.0/24"),
+						"cloudstack_network_acl_rule.foo", "rule.2090315355.cidr_list.#", "2"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.4267872693.protocol", "tcp"),
+						"cloudstack_network_acl_rule.foo", "rule.2090315355.cidr_list.2104435309", "172.18.101.0/24"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.4267872693.ports.#", "2"),
+						"cloudstack_network_acl_rule.foo", "rule.2090315355.cidr_list.3056857544", "172.18.100.0/24"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.4267872693.ports.1209010669", "1000-2000"),
+						"cloudstack_network_acl_rule.foo", "rule.2090315355.icmp_code", "-1"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.4267872693.ports.1889509032", "80"),
+						"cloudstack_network_acl_rule.foo", "rule.2090315355.icmp_type", "-1"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.4267872693.traffic_type", "egress"),
+						"cloudstack_network_acl_rule.foo", "rule.2090315355.traffic_type", "ingress"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.2576683033.action", "allow"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.2576683033.cidr_list.3056857544", "172.18.100.0/24"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.2576683033.protocol", "tcp"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.2576683033.ports.#", "2"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.2576683033.ports.1889509032", "80"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.2576683033.ports.3638101695", "443"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_network_acl_rule.foo", "rule.2576683033.traffic_type", "ingress"),
 				),
 			},
 		},
@@ -122,13 +160,13 @@ func testAccCheckCloudStackNetworkACLRulesExist(n string) resource.TestCheckFunc
 			return fmt.Errorf("No network ACL rule ID is set")
 		}
 
-		for k, uuid := range rs.Primary.Attributes {
-			if !strings.Contains(k, ".uuids.") || strings.HasSuffix(k, ".uuids.#") {
+		for k, id := range rs.Primary.Attributes {
+			if !strings.Contains(k, ".uuids.") || strings.HasSuffix(k, ".uuids.%") {
 				continue
 			}
 
 			cs := testAccProvider.Meta().(*cloudstack.CloudStackClient)
-			_, count, err := cs.NetworkACL.GetNetworkACLByID(uuid)
+			_, count, err := cs.NetworkACL.GetNetworkACLByID(id)
 
 			if err != nil {
 				return err
@@ -155,16 +193,14 @@ func testAccCheckCloudStackNetworkACLRuleDestroy(s *terraform.State) error {
 			return fmt.Errorf("No network ACL rule ID is set")
 		}
 
-		for k, uuid := range rs.Primary.Attributes {
-			if !strings.Contains(k, ".uuids.") || strings.HasSuffix(k, ".uuids.#") {
+		for k, id := range rs.Primary.Attributes {
+			if !strings.Contains(k, ".uuids.") || strings.HasSuffix(k, ".uuids.%") {
 				continue
 			}
 
-			p := cs.NetworkACL.NewDeleteNetworkACLParams(uuid)
-			_, err := cs.NetworkACL.DeleteNetworkACL(p)
-
-			if err != nil {
-				return err
+			_, _, err := cs.NetworkACL.GetNetworkACLByID(id)
+			if err == nil {
+				return fmt.Errorf("Network ACL rule %s still exists", rs.Primary.ID)
 			}
 		}
 	}
@@ -183,21 +219,36 @@ resource "cloudstack_vpc" "foobar" {
 resource "cloudstack_network_acl" "foo" {
   name = "terraform-acl"
   description = "terraform-acl-text"
-  vpc = "${cloudstack_vpc.foobar.name}"
+  vpc_id = "${cloudstack_vpc.foobar.id}"
 }
 
 resource "cloudstack_network_acl_rule" "foo" {
-  aclid = "${cloudstack_network_acl.foo.id}"
+  acl_id = "${cloudstack_network_acl.foo.id}"
 
   rule {
-	  action = "allow"
-    source_cidr = "172.16.100.0/24"
+  	action = "allow"
+    cidr_list = ["172.18.100.0/24"]
+    protocol = "all"
+    traffic_type = "ingress"
+  }
+
+  rule {
+  	action = "allow"
+    cidr_list = ["172.18.100.0/24"]
+    protocol = "icmp"
+    icmp_type = "-1"
+    icmp_code = "-1"
+    traffic_type = "ingress"
+  }
+
+  rule {
+    cidr_list = ["172.16.100.0/24"]
     protocol = "tcp"
     ports = ["80", "443"]
     traffic_type = "ingress"
   }
 }`,
-	CLOUDSTACK_VPC_CIDR,
+	CLOUDSTACK_VPC_CIDR_1,
 	CLOUDSTACK_VPC_OFFERING,
 	CLOUDSTACK_ZONE)
 
@@ -212,15 +263,31 @@ resource "cloudstack_vpc" "foobar" {
 resource "cloudstack_network_acl" "foo" {
   name = "terraform-acl"
   description = "terraform-acl-text"
-  vpc = "${cloudstack_vpc.foobar.name}"
+  vpc_id = "${cloudstack_vpc.foobar.id}"
 }
 
 resource "cloudstack_network_acl_rule" "foo" {
-  aclid = "${cloudstack_network_acl.foo.id}"
+  acl_id = "${cloudstack_network_acl.foo.id}"
+
+  rule {
+  	action = "deny"
+    cidr_list = ["172.18.100.0/24"]
+    protocol = "all"
+    traffic_type = "ingress"
+  }
+
+  rule {
+  	action = "deny"
+		cidr_list = ["172.18.100.0/24", "172.18.101.0/24"]
+    protocol = "icmp"
+    icmp_type = "-1"
+    icmp_code = "-1"
+    traffic_type = "ingress"
+  }
 
   rule {
 	  action = "allow"
-    source_cidr = "172.16.100.0/24"
+    cidr_list = ["172.18.100.0/24"]
     protocol = "tcp"
     ports = ["80", "443"]
     traffic_type = "ingress"
@@ -228,12 +295,12 @@ resource "cloudstack_network_acl_rule" "foo" {
 
   rule {
 	  action = "deny"
-    source_cidr = "10.0.0.0/24"
+    cidr_list = ["10.0.0.0/24"]
     protocol = "tcp"
     ports = ["80", "1000-2000"]
     traffic_type = "egress"
   }
 }`,
-	CLOUDSTACK_VPC_CIDR,
+	CLOUDSTACK_VPC_CIDR_1,
 	CLOUDSTACK_VPC_OFFERING,
 	CLOUDSTACK_ZONE)

@@ -3,9 +3,13 @@ package aws
 import (
 	"fmt"
 	"log"
+	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/mitchellh/goamz/ec2"
 )
 
 func resourceAwsRouteTableAssociation() *schema.Resource {
@@ -31,34 +35,49 @@ func resourceAwsRouteTableAssociation() *schema.Resource {
 }
 
 func resourceAwsRouteTableAssociationCreate(d *schema.ResourceData, meta interface{}) error {
-	ec2conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).ec2conn
 
 	log.Printf(
 		"[INFO] Creating route table association: %s => %s",
 		d.Get("subnet_id").(string),
 		d.Get("route_table_id").(string))
 
-	resp, err := ec2conn.AssociateRouteTable(
-		d.Get("route_table_id").(string),
-		d.Get("subnet_id").(string))
+	associationOpts := ec2.AssociateRouteTableInput{
+		RouteTableId: aws.String(d.Get("route_table_id").(string)),
+		SubnetId:     aws.String(d.Get("subnet_id").(string)),
+	}
 
+	var resp *ec2.AssociateRouteTableOutput
+	var err error
+	err = resource.Retry(5*time.Minute, func() *resource.RetryError {
+		resp, err = conn.AssociateRouteTable(&associationOpts)
+		if err != nil {
+			if awsErr, ok := err.(awserr.Error); ok {
+				if awsErr.Code() == "InvalidRouteTableID.NotFound" {
+					return resource.RetryableError(awsErr)
+				}
+			}
+			return resource.NonRetryableError(err)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
 	// Set the ID and return
-	d.SetId(resp.AssociationId)
+	d.SetId(*resp.AssociationId)
 	log.Printf("[INFO] Association ID: %s", d.Id())
 
 	return nil
 }
 
 func resourceAwsRouteTableAssociationRead(d *schema.ResourceData, meta interface{}) error {
-	ec2conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).ec2conn
 
 	// Get the routing table that this association belongs to
 	rtRaw, _, err := resourceAwsRouteTableStateRefreshFunc(
-		ec2conn, d.Get("route_table_id").(string))()
+		conn, d.Get("route_table_id").(string))()
 	if err != nil {
 		return err
 	}
@@ -70,9 +89,9 @@ func resourceAwsRouteTableAssociationRead(d *schema.ResourceData, meta interface
 	// Inspect that the association exists
 	found := false
 	for _, a := range rt.Associations {
-		if a.AssociationId == d.Id() {
+		if *a.RouteTableAssociationId == d.Id() {
 			found = true
-			d.Set("subnet_id", a.SubnetId)
+			d.Set("subnet_id", *a.SubnetId)
 			break
 		}
 	}
@@ -86,20 +105,22 @@ func resourceAwsRouteTableAssociationRead(d *schema.ResourceData, meta interface
 }
 
 func resourceAwsRouteTableAssociationUpdate(d *schema.ResourceData, meta interface{}) error {
-	ec2conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).ec2conn
 
 	log.Printf(
 		"[INFO] Creating route table association: %s => %s",
 		d.Get("subnet_id").(string),
 		d.Get("route_table_id").(string))
 
-	resp, err := ec2conn.ReassociateRouteTable(
-		d.Id(),
-		d.Get("route_table_id").(string))
+	req := &ec2.ReplaceRouteTableAssociationInput{
+		AssociationId: aws.String(d.Id()),
+		RouteTableId:  aws.String(d.Get("route_table_id").(string)),
+	}
+	resp, err := conn.ReplaceRouteTableAssociation(req)
 
 	if err != nil {
-		ec2err, ok := err.(*ec2.Error)
-		if ok && ec2err.Code == "InvalidAssociationID.NotFound" {
+		ec2err, ok := err.(awserr.Error)
+		if ok && ec2err.Code() == "InvalidAssociationID.NotFound" {
 			// Not found, so just create a new one
 			return resourceAwsRouteTableAssociationCreate(d, meta)
 		}
@@ -108,19 +129,22 @@ func resourceAwsRouteTableAssociationUpdate(d *schema.ResourceData, meta interfa
 	}
 
 	// Update the ID
-	d.SetId(resp.AssociationId)
+	d.SetId(*resp.NewAssociationId)
 	log.Printf("[INFO] Association ID: %s", d.Id())
 
 	return nil
 }
 
 func resourceAwsRouteTableAssociationDelete(d *schema.ResourceData, meta interface{}) error {
-	ec2conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).ec2conn
 
 	log.Printf("[INFO] Deleting route table association: %s", d.Id())
-	if _, err := ec2conn.DisassociateRouteTable(d.Id()); err != nil {
-		ec2err, ok := err.(*ec2.Error)
-		if ok && ec2err.Code == "InvalidAssociationID.NotFound" {
+	_, err := conn.DisassociateRouteTable(&ec2.DisassociateRouteTableInput{
+		AssociationId: aws.String(d.Id()),
+	})
+	if err != nil {
+		ec2err, ok := err.(awserr.Error)
+		if ok && ec2err.Code() == "InvalidAssociationID.NotFound" {
 			return nil
 		}
 

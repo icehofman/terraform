@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/terraform/remote"
+	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/terraform"
 	"github.com/mitchellh/cli"
 )
@@ -56,6 +57,182 @@ func TestApply(t *testing.T) {
 	}
 	if state == nil {
 		t.Fatal("state should not be nil")
+	}
+}
+
+// test apply with locked state
+func TestApply_lockedState(t *testing.T) {
+	statePath := testTempFile(t)
+
+	unlock, err := testLockState("./testdata", statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{
+		"-state", statePath,
+		testFixturePath("apply"),
+	}
+	if code := c.Run(args); code == 0 {
+		t.Fatal("expected error")
+	}
+
+	output := ui.ErrorWriter.String()
+	if !strings.Contains(output, "lock") {
+		t.Fatal("command output does not look like a lock error:", output)
+	}
+}
+
+// test apply with locked state, waiting for unlock
+func TestApply_lockedStateWait(t *testing.T) {
+	statePath := testTempFile(t)
+
+	unlock, err := testLockState("./testdata", statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// unlock during apply
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		unlock()
+	}()
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	// wait 4s just in case the lock process doesn't release in under a second,
+	// and we want our context to be alive for a second retry at the 3s mark.
+	args := []string{
+		"-state", statePath,
+		"-lock-timeout", "4s",
+		testFixturePath("apply"),
+	}
+	if code := c.Run(args); code != 0 {
+		log.Fatalf("lock should have succeed in less than 3s: %s", ui.ErrorWriter)
+	}
+}
+
+// high water mark counter
+type hwm struct {
+	sync.Mutex
+	val int
+	max int
+}
+
+func (t *hwm) Inc() {
+	t.Lock()
+	defer t.Unlock()
+	t.val++
+	if t.val > t.max {
+		t.max = t.val
+	}
+}
+
+func (t *hwm) Dec() {
+	t.Lock()
+	defer t.Unlock()
+	t.val--
+}
+
+func (t *hwm) Max() int {
+	t.Lock()
+	defer t.Unlock()
+	return t.max
+}
+
+func TestApply_parallelism(t *testing.T) {
+	provider := testProvider()
+	statePath := testTempFile(t)
+
+	par := 4
+
+	// This blocks all the appy functions. We close it when we exit so
+	// they end quickly after this test finishes.
+	block := make(chan struct{})
+	// signal how many goroutines have started
+	started := make(chan int, 100)
+
+	runCount := &hwm{}
+
+	provider.ApplyFn = func(
+		i *terraform.InstanceInfo,
+		s *terraform.InstanceState,
+		d *terraform.InstanceDiff) (*terraform.InstanceState, error) {
+		// Increment so we're counting parallelism
+		started <- 1
+		runCount.Inc()
+		defer runCount.Dec()
+		// Block here to stage up our max number of parallel instances
+		<-block
+
+		return nil, nil
+	}
+
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(provider),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{
+		"-state", statePath,
+		fmt.Sprintf("-parallelism=%d", par),
+		testFixturePath("parallelism"),
+	}
+
+	// Run in a goroutine. We can get any errors from the ui.OutputWriter
+	doneCh := make(chan int, 1)
+	go func() {
+		doneCh <- c.Run(args)
+	}()
+
+	timeout := time.After(5 * time.Second)
+
+	// ensure things are running
+	for i := 0; i < par; i++ {
+		select {
+		case <-timeout:
+			t.Fatal("timeout waiting for all goroutines to start")
+		case <-started:
+		}
+	}
+
+	// a little extra sleep, since we can't ensure all goroutines from the walk have
+	// really started
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+
+	select {
+	case res := <-doneCh:
+		if res != 0 {
+			t.Fatal(ui.OutputWriter.String())
+		}
+	case <-timeout:
+		t.Fatal("timeout waiting from Run()")
+	}
+
+	// The total in flight should equal the parallelism
+	if runCount.Max() != par {
+		t.Fatalf("Expected parallelism: %d, got: %d", par, runCount.Max())
 	}
 }
 
@@ -301,6 +478,47 @@ func TestApply_input(t *testing.T) {
 	}
 }
 
+// When only a partial set of the variables are set, Terraform
+// should still ask for the unset ones by default (with -input=true)
+func TestApply_inputPartial(t *testing.T) {
+	// Disable test mode so input would be asked
+	test = false
+	defer func() { test = true }()
+
+	// Set some default reader/writers for the inputs
+	defaultInputReader = bytes.NewBufferString("one\ntwo\n")
+	defaultInputWriter = new(bytes.Buffer)
+
+	statePath := testTempFile(t)
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{
+		"-state", statePath,
+		"-var", "foo=foovalue",
+		testFixturePath("apply-input-partial"),
+	}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter.String())
+	}
+
+	expected := strings.TrimSpace(`
+<no state>
+Outputs:
+
+bar = one
+foo = foovalue
+	`)
+	testStateOutput(t, statePath, expected)
+}
+
 func TestApply_noArgs(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -372,7 +590,7 @@ func TestApply_plan(t *testing.T) {
 	}
 
 	args := []string{
-		"-state", statePath,
+		"-state-out", statePath,
 		planPath,
 	}
 	if code := c.Run(args); code != 0 {
@@ -402,14 +620,94 @@ func TestApply_plan(t *testing.T) {
 	}
 }
 
+func TestApply_plan_backup(t *testing.T) {
+	plan := testPlan(t)
+	planPath := testPlanFile(t, plan)
+	statePath := testTempFile(t)
+	backupPath := testTempFile(t)
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	// create a state file that needs to be backed up
+	err := (&state.LocalState{Path: statePath}).WriteState(plan.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"-state-out", statePath,
+		"-backup", backupPath,
+		planPath,
+	}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter.String())
+	}
+
+	{
+		// Should have a backup file
+		f, err := os.Open(backupPath)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		_, err = terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+	}
+}
+
+func TestApply_plan_noBackup(t *testing.T) {
+	planPath := testPlanFile(t, testPlan(t))
+	statePath := testTempFile(t)
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{
+		"-state-out", statePath,
+		"-backup", "-",
+		planPath,
+	}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter.String())
+	}
+
+	// Ensure there is no backup
+	_, err := os.Stat(statePath + DefaultBackupExtension)
+	if err == nil || !os.IsNotExist(err) {
+		t.Fatalf("backup should not exist")
+	}
+
+	// Ensure there is no literal "-"
+	_, err = os.Stat("-")
+	if err == nil || !os.IsNotExist(err) {
+		t.Fatalf("backup should not exist")
+	}
+}
+
 func TestApply_plan_remoteState(t *testing.T) {
 	// Disable test mode so input would be asked
 	test = false
 	defer func() { test = true }()
 	tmp, cwd := testCwd(t)
 	defer testFixCwd(t, tmp, cwd)
-	if err := remote.EnsureDirectory(); err != nil {
-		t.Fatalf("err: %v", err)
+	remoteStatePath := filepath.Join(tmp, DefaultDataDir, DefaultStateFilename)
+	if err := os.MkdirAll(filepath.Dir(remoteStatePath), 0755); err != nil {
+		t.Fatalf("err: %s", err)
 	}
 
 	// Set some default reader/writers for the inputs
@@ -448,21 +746,14 @@ func TestApply_plan_remoteState(t *testing.T) {
 	}
 
 	// State file should be not be installed
-	exists, err := remote.ExistsFile(DefaultStateFilename)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if exists {
-		t.Fatalf("State path should not exist")
+	if _, err := os.Stat(filepath.Join(tmp, DefaultStateFilename)); err == nil {
+		data, _ := ioutil.ReadFile(DefaultStateFilename)
+		t.Fatalf("State path should not exist: %s", string(data))
 	}
 
-	// Check for remote state
-	output, _, err := remote.ReadLocalState()
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if output == nil {
-		t.Fatalf("missing remote state")
+	// Check that there is no remote state config
+	if _, err := os.Stat(remoteStatePath); err == nil {
+		t.Fatalf("has remote state config")
 	}
 }
 
@@ -497,7 +788,7 @@ func TestApply_planWithVarFile(t *testing.T) {
 	}
 
 	args := []string{
-		"-state", statePath,
+		"-state-out", statePath,
 		planPath,
 	}
 	if code := c.Run(args); code != 0 {
@@ -545,6 +836,39 @@ func TestApply_planVars(t *testing.T) {
 	}
 	if code := c.Run(args); code == 0 {
 		t.Fatal("should've failed")
+	}
+}
+
+// we should be able to apply a plan file with no other file dependencies
+func TestApply_planNoModuleFiles(t *testing.T) {
+	// temporary data directory which we can remove between commands
+	td, err := ioutil.TempDir("", "tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(td)
+
+	defer testChdir(t, td)()
+
+	p := testProvider()
+	planFile := testPlanFile(t, &terraform.Plan{
+		Module: testModule(t, "apply-plan-no-module"),
+	})
+
+	contextOpts := testCtxConfig(p)
+
+	apply := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: contextOpts,
+			Ui:          new(cli.MockUi),
+		},
+	}
+	args := []string{
+		planFile,
+	}
+	apply.Run(args)
+	if p.ValidateCalled {
+		t.Fatal("Validate should not be called with a plan")
 	}
 }
 
@@ -607,7 +931,7 @@ func TestApply_refresh(t *testing.T) {
 	}
 
 	// Should have a backup file
-	f, err = os.Open(statePath + DefaultBackupExtention)
+	f, err = os.Open(statePath + DefaultBackupExtension)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -795,7 +1119,7 @@ func TestApply_state(t *testing.T) {
 	}
 
 	// Should have a backup file
-	f, err = os.Open(statePath + DefaultBackupExtention)
+	f, err = os.Open(statePath + DefaultBackupExtension)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -832,6 +1156,100 @@ func TestApply_stateNoExist(t *testing.T) {
 	}
 	if code := c.Run(args); code != 1 {
 		t.Fatalf("bad: \n%s", ui.OutputWriter.String())
+	}
+}
+
+func TestApply_sensitiveOutput(t *testing.T) {
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	statePath := testTempFile(t)
+
+	args := []string{
+		"-state", statePath,
+		testFixturePath("apply-sensitive-output"),
+	}
+
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: \n%s", ui.OutputWriter.String())
+	}
+
+	output := ui.OutputWriter.String()
+	if !strings.Contains(output, "notsensitive = Hello world") {
+		t.Fatalf("bad: output should contain 'notsensitive' output\n%s", output)
+	}
+	if !strings.Contains(output, "sensitive = <sensitive>") {
+		t.Fatalf("bad: output should contain 'sensitive' output\n%s", output)
+	}
+}
+
+func TestApply_stateFuture(t *testing.T) {
+	originalState := testState()
+	originalState.TFVersion = "99.99.99"
+	statePath := testStateFile(t, originalState)
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{
+		"-state", statePath,
+		testFixturePath("apply"),
+	}
+	if code := c.Run(args); code == 0 {
+		t.Fatal("should fail")
+	}
+
+	f, err := os.Open(statePath)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	newState, err := terraform.ReadState(f)
+	f.Close()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	if !newState.Equal(originalState) {
+		t.Fatalf("bad: %#v", newState)
+	}
+	if newState.TFVersion != originalState.TFVersion {
+		t.Fatalf("bad: %#v", newState)
+	}
+}
+
+func TestApply_statePast(t *testing.T) {
+	originalState := testState()
+	originalState.TFVersion = "0.1.0"
+	statePath := testStateFile(t, originalState)
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{
+		"-state", statePath,
+		testFixturePath("apply"),
+	}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter.String())
 	}
 }
 
@@ -968,6 +1386,58 @@ func TestApply_varFileDefault(t *testing.T) {
 	}
 }
 
+func TestApply_varFileDefaultJSON(t *testing.T) {
+	varFileDir := testTempDir(t)
+	varFilePath := filepath.Join(varFileDir, "terraform.tfvars.json")
+	if err := ioutil.WriteFile(varFilePath, []byte(applyVarFileJSON), 0644); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	statePath := testTempFile(t)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if err := os.Chdir(varFileDir); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	defer os.Chdir(cwd)
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	actual := ""
+	p.DiffFn = func(
+		info *terraform.InstanceInfo,
+		s *terraform.InstanceState,
+		c *terraform.ResourceConfig) (*terraform.InstanceDiff, error) {
+		if v, ok := c.Config["value"]; ok {
+			actual = v.(string)
+		}
+
+		return &terraform.InstanceDiff{}, nil
+	}
+
+	args := []string{
+		"-state", statePath,
+		testFixturePath("apply-vars"),
+	}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter.String())
+	}
+
+	if actual != "bar" {
+		t.Fatal("didn't work")
+	}
+}
+
 func TestApply_backup(t *testing.T) {
 	originalState := &terraform.State{
 		Modules: []*terraform.ModuleState{
@@ -984,6 +1454,7 @@ func TestApply_backup(t *testing.T) {
 			},
 		},
 	}
+	originalState.Init()
 
 	statePath := testStateFile(t, originalState)
 	backupPath := testTempFile(t)
@@ -1117,10 +1588,101 @@ func TestApply_disableBackup(t *testing.T) {
 	}
 
 	// Ensure there is no backup
-	_, err = os.Stat(statePath + DefaultBackupExtention)
+	_, err = os.Stat(statePath + DefaultBackupExtension)
 	if err == nil || !os.IsNotExist(err) {
 		t.Fatalf("backup should not exist")
 	}
+
+	// Ensure there is no literal "-"
+	_, err = os.Stat("-")
+	if err == nil || !os.IsNotExist(err) {
+		t.Fatalf("backup should not exist")
+	}
+}
+
+// Test that the Terraform env is passed through
+func TestApply_terraformEnv(t *testing.T) {
+	statePath := testTempFile(t)
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{
+		"-state", statePath,
+		testFixturePath("apply-terraform-env"),
+	}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter.String())
+	}
+
+	expected := strings.TrimSpace(`
+<no state>
+Outputs:
+
+output = default
+	`)
+	testStateOutput(t, statePath, expected)
+}
+
+// Test that the Terraform env is passed through
+func TestApply_terraformEnvNonDefault(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	os.MkdirAll(td, 0755)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// Create new env
+	{
+		ui := new(cli.MockUi)
+		newCmd := &EnvNewCommand{}
+		newCmd.Meta = Meta{Ui: ui}
+		if code := newCmd.Run([]string{"test"}); code != 0 {
+			t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter)
+		}
+	}
+
+	// Switch to it
+	{
+		args := []string{"test"}
+		ui := new(cli.MockUi)
+		selCmd := &EnvSelectCommand{}
+		selCmd.Meta = Meta{Ui: ui}
+		if code := selCmd.Run(args); code != 0 {
+			t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter)
+		}
+	}
+
+	p := testProvider()
+	ui := new(cli.MockUi)
+	c := &ApplyCommand{
+		Meta: Meta{
+			ContextOpts: testCtxConfig(p),
+			Ui:          ui,
+		},
+	}
+
+	args := []string{
+		testFixturePath("apply-terraform-env"),
+	}
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, ui.ErrorWriter.String())
+	}
+
+	statePath := filepath.Join("terraform.tfstate.d", "test", "terraform.tfstate")
+	expected := strings.TrimSpace(`
+<no state>
+Outputs:
+
+output = test
+	`)
+	testStateOutput(t, statePath, expected)
 }
 
 func testHttpServer(t *testing.T) net.Listener {
@@ -1152,18 +1714,26 @@ const applyVarFile = `
 foo = "bar"
 `
 
+const applyVarFileJSON = `
+{ "foo": "bar" }
+`
+
 const testApplyDisableBackupStr = `
 ID = bar
+Tainted = false
 `
 
 const testApplyDisableBackupStateStr = `
 ID = bar
+Tainted = false
 `
 
 const testApplyStateStr = `
 ID = bar
+Tainted = false
 `
 
 const testApplyStateDiffStr = `
 ID = bar
+Tainted = false
 `

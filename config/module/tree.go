@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hashicorp/go-getter"
 	"github.com/hashicorp/terraform/config"
 )
 
@@ -23,31 +24,27 @@ type Tree struct {
 	name     string
 	config   *config.Config
 	children map[string]*Tree
+	path     []string
 	lock     sync.RWMutex
 }
-
-// GetMode is an enum that describes how modules are loaded.
-//
-// GetModeLoad says that modules will not be downloaded or updated, they will
-// only be loaded from the storage.
-//
-// GetModeGet says that modules can be initially downloaded if they don't
-// exist, but otherwise to just load from the current version in storage.
-//
-// GetModeUpdate says that modules should be checked for updates and
-// downloaded prior to loading. If there are no updates, we load the version
-// from disk, otherwise we download first and then load.
-type GetMode byte
-
-const (
-	GetModeNone GetMode = iota
-	GetModeGet
-	GetModeUpdate
-)
 
 // NewTree returns a new Tree for the given config structure.
 func NewTree(name string, c *config.Config) *Tree {
 	return &Tree{config: c, name: name}
+}
+
+// NewEmptyTree returns a new tree that is empty (contains no configuration).
+func NewEmptyTree() *Tree {
+	t := &Tree{config: &config.Config{}}
+
+	// We do this dummy load so that the tree is marked as "loaded". It
+	// should never fail because this is just about a no-op. If it does fail
+	// we panic so we can know its a bug.
+	if err := t.Load(nil, GetModeGet); err != nil {
+		panic(err)
+	}
+
+	return t
 }
 
 // NewTreeModule is like NewTree except it parses the configuration in
@@ -69,6 +66,10 @@ func (t *Tree) Config() *config.Config {
 
 // Child returns the child with the given path (by name).
 func (t *Tree) Child(path []string) *Tree {
+	if t == nil {
+		return nil
+	}
+
 	if len(path) == 0 {
 		return t
 	}
@@ -135,7 +136,7 @@ func (t *Tree) Name() string {
 // module trees inherently require the configuration to be in a reasonably
 // sane state: no circular dependencies, proper module sources, etc. A full
 // suite of validations can be done by running Validate (after loading).
-func (t *Tree) Load(s Storage, mode GetMode) error {
+func (t *Tree) Load(s getter.Storage, mode GetMode) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
@@ -152,28 +153,35 @@ func (t *Tree) Load(s Storage, mode GetMode) error {
 				"module %s: duplicated. module names must be unique", m.Name)
 		}
 
-		// Split out the subdir if we have one
-		source, subDir := getDirSubdir(m.Source)
+		// Determine the path to this child
+		path := make([]string, len(t.path), len(t.path)+1)
+		copy(path, t.path)
+		path = append(path, m.Name)
 
-		source, err := Detect(source, t.config.Dir)
+		// Split out the subdir if we have one
+		source, subDir := getter.SourceDirSubdir(m.Source)
+
+		source, err := getter.Detect(source, t.config.Dir, getter.Detectors)
 		if err != nil {
 			return fmt.Errorf("module %s: %s", m.Name, err)
 		}
 
 		// Check if the detector introduced something new.
-		source, subDir2 := getDirSubdir(source)
+		source, subDir2 := getter.SourceDirSubdir(source)
 		if subDir2 != "" {
 			subDir = filepath.Join(subDir2, subDir)
 		}
 
 		// Get the directory where this module is so we can load it
-		dir, ok, err := getStorage(s, source, mode)
+		key := strings.Join(path, ".")
+		key = fmt.Sprintf("root.%s-%s", key, m.Source)
+		dir, ok, err := getStorage(s, key, source, mode)
 		if err != nil {
 			return err
 		}
 		if !ok {
 			return fmt.Errorf(
-				"module %s: not found, may need to be downloaded", m.Name)
+				"module %s: not found, may need to be downloaded using 'terraform get'", m.Name)
 		}
 
 		// If we have a subdirectory, then merge that in
@@ -187,6 +195,9 @@ func (t *Tree) Load(s Storage, mode GetMode) error {
 			return fmt.Errorf(
 				"module %s: %s", m.Name, err)
 		}
+
+		// Set the path of this child
+		children[m.Name].path = path
 	}
 
 	// Go through all the children and load them.
@@ -202,10 +213,19 @@ func (t *Tree) Load(s Storage, mode GetMode) error {
 	return nil
 }
 
+// Path is the full path to this tree.
+func (t *Tree) Path() []string {
+	return t.path
+}
+
 // String gives a nice output to describe the tree.
 func (t *Tree) String() string {
 	var result bytes.Buffer
-	result.WriteString(t.Name() + "\n")
+	path := strings.Join(t.path, ", ")
+	if path != "" {
+		path = fmt.Sprintf(" (path: %s)", path)
+	}
+	result.WriteString(t.Name() + path + "\n")
 
 	cs := t.Children()
 	if cs == nil {
@@ -239,12 +259,27 @@ func (t *Tree) Validate() error {
 	}
 
 	// If something goes wrong, here is our error template
-	newErr := &TreeError{Name: []string{t.Name()}}
+	newErr := &treeError{Name: []string{t.Name()}}
+
+	// Terraform core does not handle root module children named "root".
+	// We plan to fix this in the future but this bug was brought up in
+	// the middle of a release and we don't want to introduce wide-sweeping
+	// changes at that time.
+	if len(t.path) == 1 && t.name == "root" {
+		return fmt.Errorf("root module cannot contain module named 'root'")
+	}
 
 	// Validate our configuration first.
 	if err := t.config.Validate(); err != nil {
-		newErr.Err = err
-		return newErr
+		newErr.Add(err)
+	}
+
+	// If we're the root, we do extra validation. This validation usually
+	// requires the entire tree (since children don't have parent pointers).
+	if len(t.path) == 0 {
+		if err := t.validateProviderAlias(); err != nil {
+			newErr.Add(err)
+		}
 	}
 
 	// Get the child trees
@@ -257,7 +292,7 @@ func (t *Tree) Validate() error {
 			continue
 		}
 
-		verr, ok := err.(*TreeError)
+		verr, ok := err.(*treeError)
 		if !ok {
 			// Unknown error, just return...
 			return err
@@ -265,7 +300,7 @@ func (t *Tree) Validate() error {
 
 		// Append ourselves to the error and then return
 		verr.Name = append(verr.Name, t.Name())
-		return verr
+		newErr.AddChild(verr)
 	}
 
 	// Go over all the modules and verify that any parameters are valid
@@ -291,10 +326,9 @@ func (t *Tree) Validate() error {
 		// Compare to the keys in our raw config for the module
 		for k, _ := range m.RawConfig.Raw {
 			if _, ok := varMap[k]; !ok {
-				newErr.Err = fmt.Errorf(
+				newErr.Add(fmt.Errorf(
 					"module %s: %s is not a valid parameter",
-					m.Name, k)
-				return newErr
+					m.Name, k))
 			}
 
 			// Remove the required
@@ -303,10 +337,9 @@ func (t *Tree) Validate() error {
 
 		// If we have any required left over, they aren't set.
 		for k, _ := range requiredMap {
-			newErr.Err = fmt.Errorf(
-				"module %s: required variable %s not set",
-				m.Name, k)
-			return newErr
+			newErr.Add(fmt.Errorf(
+				"module %s: required variable %q not set",
+				m.Name, k))
 		}
 	}
 
@@ -321,8 +354,10 @@ func (t *Tree) Validate() error {
 
 			tree, ok := children[mv.Name]
 			if !ok {
-				// This should never happen because Load watches us
-				panic("module not found in children: " + mv.Name)
+				newErr.Add(fmt.Errorf(
+					"%s: undefined module referenced %s",
+					source, mv.Name))
+				continue
 			}
 
 			found := false
@@ -333,33 +368,61 @@ func (t *Tree) Validate() error {
 				}
 			}
 			if !found {
-				newErr.Err = fmt.Errorf(
+				newErr.Add(fmt.Errorf(
 					"%s: %s is not a valid output for module %s",
-					source, mv.Field, mv.Name)
-				return newErr
+					source, mv.Field, mv.Name))
 			}
 		}
 	}
 
+	return newErr.ErrOrNil()
+}
+
+// treeError is an error use by Tree.Validate to accumulates all
+// validation errors.
+type treeError struct {
+	Name     []string
+	Errs     []error
+	Children []*treeError
+}
+
+func (e *treeError) Add(err error) {
+	e.Errs = append(e.Errs, err)
+}
+
+func (e *treeError) AddChild(err *treeError) {
+	e.Children = append(e.Children, err)
+}
+
+func (e *treeError) ErrOrNil() error {
+	if len(e.Errs) > 0 || len(e.Children) > 0 {
+		return e
+	}
 	return nil
 }
 
-// TreeError is an error returned by Tree.Validate if an error occurs
-// with validation.
-type TreeError struct {
-	Name []string
-	Err  error
-}
+func (e *treeError) Error() string {
+	name := strings.Join(e.Name, ".")
+	var out bytes.Buffer
+	fmt.Fprintf(&out, "module %s: ", name)
 
-func (e *TreeError) Error() string {
-	// Build up the name
-	var buf bytes.Buffer
-	for _, n := range e.Name {
-		buf.WriteString(n)
-		buf.WriteString(".")
+	if len(e.Errs) == 1 {
+		// single like error
+		out.WriteString(e.Errs[0].Error())
+	} else {
+		// multi-line error
+		for _, err := range e.Errs {
+			fmt.Fprintf(&out, "\n    %s", err)
+		}
 	}
-	buf.Truncate(buf.Len() - 1)
 
-	// Format the value
-	return fmt.Sprintf("module %s: %s", buf.String(), e.Err)
+	if len(e.Children) > 0 {
+		// start the next error on a new line
+		out.WriteString("\n  ")
+	}
+	for _, child := range e.Children {
+		out.WriteString(child.Error())
+	}
+
+	return out.String()
 }

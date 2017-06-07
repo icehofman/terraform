@@ -16,23 +16,36 @@ to `terraform apply` to ensure only the pre-planned actions are executed.
 
 ## Usage
 
-Usage: `terraform plan [options] [dir]`
+Usage: `terraform plan [options] [dir-or-plan]`
 
 By default, `plan` requires no flags and looks in the current directory
 for the configuration and state file to refresh.
 
-The command-line flags are all optional. The list of available flags are:
+If the command is given an existing saved plan as an argument, the
+command will output the contents of the saved plan. In this scenario,
+the `plan` command will not modify the given plan. This can be used to
+inspect a planfile.
 
-* `-backup=path` - Path to the backup file. Defaults to `-state-out` with
-  the ".backup" extension. Disabled by setting to "-".
+The command-line flags are all optional. The list of available flags are:
 
 * `-destroy` - If set, generates a plan to destroy all the known resources.
 
+* `-detailed-exitcode` - Return a detailed exit code when the command exits.
+  When provided, this argument changes the exit codes and their meanings to
+  provide more granular information about what the resulting plan contains:
+  * 0 = Succeeded with empty diff (no changes)
+  * 1 = Error
+  * 2 = Succeeded with non-empty diff (changes present)
+
 * `-input=true` - Ask for input for variables if not directly set.
+
+* `-lock=true` - Lock the state file when locking is supported.
+
+* `-lock-timeout=0s` - Duration to retry a state lock.
 
 * `-module-depth=n` - Specifies the depth of modules to show in the output.
   This does not affect the plan itself, only the output shown. By default,
-  this is zero. -1 will expand all.
+  this is -1, which will expand all.
 
 * `-no-color` - Disables output with coloring.
 
@@ -41,16 +54,29 @@ The command-line flags are all optional. The list of available flags are:
   changes shown in this plan are applied. Read the warning on saved
   plans below.
 
+* `-parallelism=n` - Limit the number of concurrent operation as Terraform
+  [walks the graph](/docs/internals/graph.html#walking-the-graph).
+
 * `-refresh=true` - Update the state prior to checking for differences.
 
 * `-state=path` - Path to the state file. Defaults to "terraform.tfstate".
+  Ignored when [remote state](/docs/state/remote.html) is used.
 
-* `-var 'foo=bar'` - Set a variable in the Terraform configuration. This
-  flag can be set multiple times.
+* `-target=resource` - A [Resource
+  Address](/docs/internals/resource-addressing.html) to target. Operation will
+  be limited to this resource and its dependencies. This flag can be used
+  multiple times.
+
+* `-var 'foo=bar'` - Set a variable in the Terraform configuration. This flag
+  can be set multiple times. Variable values are interpreted as
+  [HCL](/docs/configuration/syntax.html#HCL), so list and map values can be
+  specified via this flag.
 
 * `-var-file=foo` - Set variables in the Terraform configuration from
-   a file. If "terraform.tfvars" is present, it will be automatically
-   loaded if this flag is not specified.
+   a [variable file](/docs/configuration/variables.html#variable-files). If
+  "terraform.tfvars" is present, it will be automatically loaded first. Any
+  files specified by `-var-file` override any values in a "terraform.tfvars".
+  This flag can be used multiple times.
 
 ## Security Warning
 

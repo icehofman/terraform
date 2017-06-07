@@ -11,7 +11,21 @@ func TestSetAdd(t *testing.T) {
 	s.Add(5)
 	s.Add(25)
 
-	expected := []interface{}{1, 5, 25}
+	expected := []interface{}{1, 25, 5}
+	actual := s.List()
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("bad: %#v", actual)
+	}
+}
+
+func TestSetAdd_negative(t *testing.T) {
+	// Since we don't allow negative hashes, this should just hash to the
+	// same thing...
+	s := &Set{F: testSetInt}
+	s.Add(-1)
+	s.Add(1)
+
+	expected := []interface{}{-1}
 	actual := s.List()
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("bad: %#v", actual)
@@ -21,11 +35,15 @@ func TestSetAdd(t *testing.T) {
 func TestSetContains(t *testing.T) {
 	s := &Set{F: testSetInt}
 	s.Add(5)
+	s.Add(-5)
 
 	if s.Contains(2) {
 		t.Fatal("should not contain")
 	}
 	if !s.Contains(5) {
+		t.Fatal("should contain")
+	}
+	if !s.Contains(-5) {
 		t.Fatal("should contain")
 	}
 }
@@ -83,7 +101,7 @@ func TestSetUnion(t *testing.T) {
 	union := s1.Union(s2)
 	union.Add(2)
 
-	expected := []interface{}{1, 2, 5, 25}
+	expected := []interface{}{1, 2, 25, 5}
 	actual := union.List()
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("bad: %#v", actual)
@@ -92,4 +110,21 @@ func TestSetUnion(t *testing.T) {
 
 func testSetInt(v interface{}) int {
 	return v.(int)
+}
+
+func TestHashResource_nil(t *testing.T) {
+	resource := &Resource{
+		Schema: map[string]*Schema{
+			"name": {
+				Type:     TypeString,
+				Optional: true,
+			},
+		},
+	}
+	f := HashResource(resource)
+
+	idx := f(nil)
+	if idx != 0 {
+		t.Fatalf("Expected 0 when hashing nil, given: %d", idx)
+	}
 }

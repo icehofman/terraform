@@ -9,7 +9,7 @@ description: |-
 # Provider Configuration
 
 Providers are responsible in Terraform for managing the lifecycle
-of a [resource](/docs/configuration/resource.html): create,
+of a [resource](/docs/configuration/resources.html): create,
 read, update, delete.
 
 Every resource in Terraform is mapped to a provider based
@@ -29,11 +29,11 @@ already.
 
 A provider configuration looks like the following:
 
-```
+```hcl
 provider "aws" {
-	access_key = "foo"
-	secret_key = "bar"
-	region = "us-east-1"
+  access_key = "foo"
+  secret_key = "bar"
+  region = "us-east-1"
 }
 ```
 
@@ -45,34 +45,83 @@ Multiple provider blocks can be used to configure multiple providers.
 Terraform matches providers to resources by matching two criteria.
 Both criteria must be matched for a provider to manage a resource:
 
-  * They must share a common prefix. Longest matching prefixes are
-    tried first. For example, `aws_instance` would choose the
-    `aws` provider.
+- They must share a common prefix. Longest matching prefixes are tried first.
+  For example, `aws_instance` would choose the `aws` provider.
 
-  * The provider must report that it supports the given resource
-    type. Providers internally tell Terraform the list of resources
-    they support.
+- The provider must report that it supports the given resource type. Providers
+  internally tell Terraform the list of resources they support.
 
 Within the block (the `{ }`) is configuration for the resource.
 The configuration is dependent on the type, and is documented
 [for each provider](/docs/providers/index.html).
 
+## Multiple Provider Instances
+
+You can define multiple instances of the same provider in order to support
+multiple regions, multiple hosts, etc. The primary use case for this is
+utilizing multiple cloud regions. Other use cases include targeting multiple
+Docker hosts, multiple Consul hosts, etc.
+
+To define multiple provider instances, repeat the provider configuration
+multiple times, but set the `alias` field and name the provider. For
+example:
+
+```hcl
+# The default provider
+provider "aws" {
+  # ...
+}
+
+# West coast region
+provider "aws" {
+  alias  = "west"
+  region = "us-west-2"
+}
+```
+
+After naming a provider, you reference it in resources with the `provider`
+field:
+
+```hcl
+resource "aws_instance" "foo" {
+  provider = "aws.west"
+
+  # ...
+}
+```
+
+If a provider isn't specified, then the default provider configuration
+is used (the provider configuration with no `alias` set). The value of the
+`provider` field is `TYPE.ALIAS`, such as "aws.west" above.
+
 ## Syntax
 
 The full syntax is:
 
-```
+```text
 provider NAME {
-	CONFIG ...
+  CONFIG ...
+  [alias = ALIAS]
 }
 ```
 
 where `CONFIG` is:
 
-```
+```text
 KEY = VALUE
 
 KEY {
-	CONFIG
+  CONFIG
 }
 ```
+
+## Interpolation
+Providers support [interpolation syntax](/docs/configuration/interpolation.html) allowing dynamic configuration at run time.
+
+```hcl
+provider "aws" {
+  region = "${var.aws_region}"
+}
+```
+
+-> **NOTE:** Because providers are one of the first things loaded when Terraform parses the graph, it is not possible to use the output from modules or resources as inputs to the provider. At this time, only [variables](/docs/configuration/variables.html) and [data sources](/docs/configuration/data-sources.html), including [remote state](/docs/providers/terraform/d/remote_state.html) may be used in an interpolation inside a provider stanza.

@@ -6,20 +6,20 @@ description: |-
   Creates firewall rules for a given IP address.
 ---
 
-# cloudstack\_firewall
+# cloudstack_firewall
 
 Creates firewall rules for a given IP address.
 
 ## Example Usage
 
-```
+```hcl
 resource "cloudstack_firewall" "default" {
-  ipaddress = "192.168.0.1"
+  ip_address_id = "30b21801-d4b3-4174-852b-0c0f30bdbbfb"
 
   rule {
-    source_cidr = "10.0.0.0/8"
-    protocol = "tcp"
-    ports = ["80", "1000-2000"]
+    cidr_list = ["10.0.0.0/8"]
+    protocol  = "tcp"
+    ports     = ["80", "1000-2000"]
   }
 }
 ```
@@ -28,8 +28,8 @@ resource "cloudstack_firewall" "default" {
 
 The following arguments are supported:
 
-* `ipaddress` - (Required) The IP address for which to create the firewall rules.
-    Changing this forces a new resource to be created.
+* `ip_address_id` - (Required) The IP address ID for which to create the
+    firewall rules. Changing this forces a new resource to be created.
 
 * `managed` - (Optional) USE WITH CAUTION! If enabled all the firewall rules for
     this IP address will be managed by this resource. This means it will delete
@@ -38,9 +38,12 @@ The following arguments are supported:
 * `rule` - (Optional) Can be specified multiple times. Each rule block supports
     fields documented below. If `managed = false` at least one rule is required!
 
+* `parallelism` (Optional) Specifies how much rules will be created or deleted
+    concurrently. (defaults 2)
+
 The `rule` block supports:
 
-* `source_cidr` - (Required) The source CIDR to allow access to the given ports.
+* `cidr_list` - (Required) A CIDR list to allow access to the given ports.
 
 * `protocol` - (Required) The name of the protocol to allow. Valid options are:
     `tcp`, `udp` and `icmp`.
@@ -58,4 +61,4 @@ The `rule` block supports:
 
 The following attributes are exported:
 
-* `ID` - The IP address ID for which the firewall rules are created.
+* `id` - The IP address ID for which the firewall rules are created.

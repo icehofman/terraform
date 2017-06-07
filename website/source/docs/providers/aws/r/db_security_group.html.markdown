@@ -8,18 +8,20 @@ description: |-
 
 # aws\_db\_security\_group
 
-Provides an RDS security group resource.
+Provides an RDS security group resource. This is only for DB instances in the
+EC2-Classic Platform. For instances inside a VPC, use the
+[`aws_db_instance.vpc_security_group_ids`](/docs/providers/aws/r/db_instance.html#vpc_security_group_ids)
+attribute instead.
 
 ## Example Usage
 
-```
+```hcl
 resource "aws_db_security_group" "default" {
-    name = "rds_sg"
-    description = "RDS default security group"
+  name = "rds_sg"
 
-    ingress {
-        cidr = "10.0.0.0/24"
-    }
+  ingress {
+    cidr = "10.0.0.0/24"
+  }
 }
 ```
 
@@ -28,8 +30,9 @@ resource "aws_db_security_group" "default" {
 The following arguments are supported:
 
 * `name` - (Required) The name of the DB security group.
-* `description` - (Required) The description of the DB security group.
-* `ingress` - (Optional) A list of ingress rules.
+* `description` - (Optional) The description of the DB security group. Defaults to "Managed by Terraform".
+* `ingress` - (Required) A list of ingress rules.
+* `tags` - (Optional) A mapping of tags to assign to the resource.
 
 Ingress blocks support the following:
 
@@ -44,4 +47,13 @@ Ingress blocks support the following:
 The following attributes are exported:
 
 * `id` - The db security group ID.
+* `arn` - The arn of the DB security group.
 
+
+## Import
+
+DB Security groups can be imported using the `name`, e.g.
+
+```
+$ terraform import aws_db_security_group.default aws_rds_sg-1
+```

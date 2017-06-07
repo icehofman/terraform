@@ -2,11 +2,11 @@ package module
 
 import (
 	"io/ioutil"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/hashicorp/go-getter"
 	"github.com/hashicorp/terraform/config"
 )
 
@@ -33,24 +33,6 @@ func testConfig(t *testing.T, n string) *config.Config {
 	return c
 }
 
-func testModule(n string) string {
-	p := filepath.Join(fixtureDir, n)
-	p, err := filepath.Abs(p)
-	if err != nil {
-		panic(err)
-	}
-	return fmtFileURL(p)
-}
-
-func testModuleURL(n string) *url.URL {
-	u, err := urlParse(testModule(n))
-	if err != nil {
-		panic(err)
-	}
-
-	return u
-}
-
-func testStorage(t *testing.T) Storage {
-	return &FolderStorage{StorageDir: tempDir(t)}
+func testStorage(t *testing.T) getter.Storage {
+	return &getter.FolderStorage{StorageDir: tempDir(t)}
 }

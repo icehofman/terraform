@@ -21,18 +21,12 @@ func (r *MapFieldReader) ReadField(address []string) (FieldReadResult, error) {
 
 	schema := schemaList[len(schemaList)-1]
 	switch schema.Type {
-	case TypeBool:
-		fallthrough
-	case TypeInt:
-		fallthrough
-	case TypeFloat:
-		fallthrough
-	case TypeString:
+	case TypeBool, TypeInt, TypeFloat, TypeString:
 		return r.readPrimitive(address, schema)
 	case TypeList:
 		return readListField(r, address, schema)
 	case TypeMap:
-		return r.readMap(k)
+		return r.readMap(k, schema)
 	case TypeSet:
 		return r.readSet(address, schema)
 	case typeObject:
@@ -42,7 +36,7 @@ func (r *MapFieldReader) ReadField(address []string) (FieldReadResult, error) {
 	}
 }
 
-func (r *MapFieldReader) readMap(k string) (FieldReadResult, error) {
+func (r *MapFieldReader) readMap(k string, schema *Schema) (FieldReadResult, error) {
 	result := make(map[string]interface{})
 	resultSet := false
 
@@ -56,15 +50,21 @@ func (r *MapFieldReader) readMap(k string) (FieldReadResult, error) {
 	prefix := k + "."
 	r.Map.Range(func(k, v string) bool {
 		if strings.HasPrefix(k, prefix) {
+			resultSet = true
+
 			key := k[len(prefix):]
-			if key != "#" {
+			if key != "%" && key != "#" {
 				result[key] = v
-				resultSet = true
 			}
 		}
 
 		return true
 	})
+
+	err := mapValuesToPrimitive(result, schema)
+	if err != nil {
+		return FieldReadResult{}, nil
+	}
 
 	var resultVal interface{}
 	if resultSet {
@@ -110,7 +110,7 @@ func (r *MapFieldReader) readSet(
 	}
 
 	// Create the set that will be our result
-	set := &Set{F: schema.Set}
+	set := schema.ZeroValue().(*Set)
 
 	// If we have an empty list, then return an empty list
 	if countRaw.Computed || countRaw.Value.(int) == 0 {

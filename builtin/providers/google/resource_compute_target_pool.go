@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
-	"code.google.com/p/google-api-go-client/googleapi"
 	"github.com/hashicorp/terraform/helper/schema"
+	"google.golang.org/api/compute/v1"
 )
 
 func resourceComputeTargetPool() *schema.Resource {
@@ -17,94 +15,96 @@ func resourceComputeTargetPool() *schema.Resource {
 		Read:   resourceComputeTargetPoolRead,
 		Delete: resourceComputeTargetPoolDelete,
 		Update: resourceComputeTargetPoolUpdate,
+		Importer: &schema.ResourceImporter{
+			State: schema.ImportStatePassthrough,
+		},
 
 		Schema: map[string]*schema.Schema{
-			"backup_pool": &schema.Schema{
-				Type:     schema.TypeString,
-				Optional: true,
-				ForceNew: false,
-			},
-
-			"description": &schema.Schema{
-				Type:     schema.TypeString,
-				Optional: true,
-				ForceNew: true,
-			},
-
-			"failover_ratio": &schema.Schema{
-				Type:     schema.TypeFloat,
-				Optional: true,
-				ForceNew: true,
-			},
-
-			"health_checks": &schema.Schema{
-				Type:     schema.TypeList,
-				Optional: true,
-				ForceNew: false,
-				Elem:     &schema.Schema{Type: schema.TypeString},
-			},
-
-			"instances": &schema.Schema{
-				Type:     schema.TypeList,
-				Optional: true,
-				ForceNew: false,
-				Elem:     &schema.Schema{Type: schema.TypeString},
-			},
-
-			"name": &schema.Schema{
+			"name": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"self_link": &schema.Schema{
+			"backup_pool": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: false,
+			},
+
+			"description": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"failover_ratio": {
+				Type:     schema.TypeFloat,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"health_checks": {
+				Type:     schema.TypeList,
+				Optional: true,
+				ForceNew: false,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+
+			"instances": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Computed: true,
+				ForceNew: false,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+
+			"project": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Computed: true,
+			},
+
+			"region": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Computed: true,
+			},
+
+			"self_link": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
 
-			"session_affinity": &schema.Schema{
+			"session_affinity": {
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
+				Default:  "NONE",
 			},
 		},
 	}
 }
 
 func convertStringArr(ifaceArr []interface{}) []string {
-    arr := make([]string, len(ifaceArr))
-    for i, v := range ifaceArr {
-        arr[i] = v.(string)
-    }
-    return arr
-}
-
-func waitOp(config *Config, op *compute.Operation,
-	resource string, action string) (*compute.Operation, error) {
-
-	w := &OperationWaiter{
-		Service: config.clientCompute,
-		Op:      op,
-		Region:  config.Region,
-		Project: config.Project,
-		Type:    OperationWaitRegion,
+	var arr []string
+	for _, v := range ifaceArr {
+		if v == nil {
+			continue
+		}
+		arr = append(arr, v.(string))
 	}
-	state := w.Conf()
-	state.Timeout = 2 * time.Minute
-	state.MinTimeout = 1 * time.Second
-	opRaw, err := state.WaitForState()
-	if err != nil {
-		return nil, fmt.Errorf("Error waiting for %s to %s: %s", resource, action, err)
-	}
-	return opRaw.(*compute.Operation), nil
+	return arr
 }
 
 // Healthchecks need to exist before being referred to from the target pool.
-func convertHealthChecks(config *Config, names []string) ([]string, error) {
+func convertHealthChecks(config *Config, project string, names []string) ([]string, error) {
 	urls := make([]string, len(names))
 	for i, name := range names {
 		// Look up the healthcheck
-		res, err := config.clientCompute.HttpHealthChecks.Get(config.Project, name).Do()
+		res, err := config.clientCompute.HttpHealthChecks.Get(project, name).Do()
 		if err != nil {
 			return nil, fmt.Errorf("Error reading HealthCheck: %s", err)
 		}
@@ -115,7 +115,7 @@ func convertHealthChecks(config *Config, names []string) ([]string, error) {
 
 // Instances do not need to exist yet, so we simply generate URLs.
 // Instances can be full URLS or zone/name
-func convertInstances(config *Config, names []string) ([]string, error) {
+func convertInstancesToUrls(config *Config, project string, names []string) ([]string, error) {
 	urls := make([]string, len(names))
 	for i, name := range names {
 		if strings.HasPrefix(name, "https://www.googleapis.com/compute/v1/") {
@@ -127,7 +127,7 @@ func convertInstances(config *Config, names []string) ([]string, error) {
 			} else {
 				urls[i] = fmt.Sprintf(
 					"https://www.googleapis.com/compute/v1/projects/%s/zones/%s/instances/%s",
-					config.Project, splitName[0], splitName[1])
+					project, splitName[0], splitName[1])
 			}
 		}
 	}
@@ -137,25 +137,35 @@ func convertInstances(config *Config, names []string) ([]string, error) {
 func resourceComputeTargetPoolCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
-	hchkUrls, err := convertHealthChecks(
-		config, convertStringArr(d.Get("health_checks").([]interface{})))
+	region, err := getRegion(d, config)
 	if err != nil {
 		return err
 	}
 
-	instanceUrls, err := convertInstances(
-		config, convertStringArr(d.Get("instances").([]interface{})))
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
+
+	hchkUrls, err := convertHealthChecks(
+		config, project, convertStringArr(d.Get("health_checks").([]interface{})))
+	if err != nil {
+		return err
+	}
+
+	instanceUrls, err := convertInstancesToUrls(
+		config, project, convertStringArr(d.Get("instances").([]interface{})))
 	if err != nil {
 		return err
 	}
 
 	// Build the parameter
 	tpool := &compute.TargetPool{
-		BackupPool: d.Get("backup_pool").(string),
-		Description: d.Get("description").(string),
-		HealthChecks: hchkUrls,
-		Instances:  instanceUrls,
-		Name: d.Get("name").(string),
+		BackupPool:      d.Get("backup_pool").(string),
+		Description:     d.Get("description").(string),
+		HealthChecks:    hchkUrls,
+		Instances:       instanceUrls,
+		Name:            d.Get("name").(string),
 		SessionAffinity: d.Get("session_affinity").(string),
 	}
 	if d.Get("failover_ratio") != nil {
@@ -163,7 +173,7 @@ func resourceComputeTargetPoolCreate(d *schema.ResourceData, meta interface{}) e
 	}
 	log.Printf("[DEBUG] TargetPool insert request: %#v", tpool)
 	op, err := config.clientCompute.TargetPools.Insert(
-		config.Project, config.Region, tpool).Do()
+		project, region, tpool).Do()
 	if err != nil {
 		return fmt.Errorf("Error creating TargetPool: %s", err)
 	}
@@ -171,17 +181,10 @@ func resourceComputeTargetPoolCreate(d *schema.ResourceData, meta interface{}) e
 	// It probably maybe worked, so store the ID now
 	d.SetId(tpool.Name)
 
-	op, err = waitOp(config, op, "TargetPool", "create")
+	err = computeOperationWaitRegion(config, op, project, region, "Creating Target Pool")
 	if err != nil {
 		return err
 	}
-	if op.Error != nil {
-		// The resource didn't actually create
-		d.SetId("")
-		// Return the error
-		return OperationError(*op.Error)
-	}
-
 	return resourceComputeTargetPoolRead(d, meta)
 }
 
@@ -215,9 +218,18 @@ func calcAddRemove(from []string, to []string) ([]string, []string) {
 	return add, remove
 }
 
-
 func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
+
+	region, err := getRegion(d, config)
+	if err != nil {
+		return err
+	}
+
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
 
 	d.Partial(true)
 
@@ -226,11 +238,11 @@ func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) e
 		from_, to_ := d.GetChange("health_checks")
 		from := convertStringArr(from_.([]interface{}))
 		to := convertStringArr(to_.([]interface{}))
-		fromUrls, err := convertHealthChecks(config, from)
+		fromUrls, err := convertHealthChecks(config, project, from)
 		if err != nil {
 			return err
 		}
-		toUrls, err := convertHealthChecks(config, to)
+		toUrls, err := convertHealthChecks(config, project, to)
 		if err != nil {
 			return err
 		}
@@ -243,18 +255,15 @@ func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) e
 			removeReq.HealthChecks[i] = &compute.HealthCheckReference{HealthCheck: v}
 		}
 		op, err := config.clientCompute.TargetPools.RemoveHealthCheck(
-			config.Project, config.Region, d.Id(), removeReq).Do()
+			project, region, d.Id(), removeReq).Do()
 		if err != nil {
 			return fmt.Errorf("Error updating health_check: %s", err)
 		}
-		op, err = waitOp(config, op, "TargetPool", "removing HealthChecks")
+
+		err = computeOperationWaitRegion(config, op, project, region, "Updating Target Pool")
 		if err != nil {
 			return err
 		}
-		if op.Error != nil {
-			return OperationError(*op.Error)
-		}
-
 		addReq := &compute.TargetPoolsAddHealthCheckRequest{
 			HealthChecks: make([]*compute.HealthCheckReference, len(add)),
 		}
@@ -262,18 +271,15 @@ func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) e
 			addReq.HealthChecks[i] = &compute.HealthCheckReference{HealthCheck: v}
 		}
 		op, err = config.clientCompute.TargetPools.AddHealthCheck(
-			config.Project, config.Region, d.Id(), addReq).Do()
+			project, region, d.Id(), addReq).Do()
 		if err != nil {
 			return fmt.Errorf("Error updating health_check: %s", err)
 		}
-		op, err = waitOp(config, op, "TargetPool", "adding HealthChecks")
+
+		err = computeOperationWaitRegion(config, op, project, region, "Updating Target Pool")
 		if err != nil {
 			return err
 		}
-		if op.Error != nil {
-			return OperationError(*op.Error)
-		}
-
 		d.SetPartial("health_checks")
 	}
 
@@ -282,11 +288,11 @@ func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) e
 		from_, to_ := d.GetChange("instances")
 		from := convertStringArr(from_.([]interface{}))
 		to := convertStringArr(to_.([]interface{}))
-		fromUrls, err := convertInstances(config, from)
+		fromUrls, err := convertInstancesToUrls(config, project, from)
 		if err != nil {
 			return err
 		}
-		toUrls, err := convertInstances(config, to)
+		toUrls, err := convertInstancesToUrls(config, project, to)
 		if err != nil {
 			return err
 		}
@@ -299,18 +305,15 @@ func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) e
 			addReq.Instances[i] = &compute.InstanceReference{Instance: v}
 		}
 		op, err := config.clientCompute.TargetPools.AddInstance(
-			config.Project, config.Region, d.Id(), addReq).Do()
+			project, region, d.Id(), addReq).Do()
 		if err != nil {
 			return fmt.Errorf("Error updating instances: %s", err)
 		}
-		op, err = waitOp(config, op, "TargetPool", "adding instances")
+
+		err = computeOperationWaitRegion(config, op, project, region, "Updating Target Pool")
 		if err != nil {
 			return err
 		}
-		if op.Error != nil {
-			return OperationError(*op.Error)
-		}
-
 		removeReq := &compute.TargetPoolsRemoveInstanceRequest{
 			Instances: make([]*compute.InstanceReference, len(remove)),
 		}
@@ -318,18 +321,14 @@ func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) e
 			removeReq.Instances[i] = &compute.InstanceReference{Instance: v}
 		}
 		op, err = config.clientCompute.TargetPools.RemoveInstance(
-			config.Project, config.Region, d.Id(), removeReq).Do()
+			project, region, d.Id(), removeReq).Do()
 		if err != nil {
 			return fmt.Errorf("Error updating instances: %s", err)
 		}
-		op, err = waitOp(config, op, "TargetPool", "removing instances")
+		err = computeOperationWaitRegion(config, op, project, region, "Updating Target Pool")
 		if err != nil {
 			return err
 		}
-		if op.Error != nil {
-			return OperationError(*op.Error)
-		}
-
 		d.SetPartial("instances")
 	}
 
@@ -339,19 +338,15 @@ func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) e
 			Target: bpool_name,
 		}
 		op, err := config.clientCompute.TargetPools.SetBackup(
-			config.Project, config.Region, d.Id(), tref).Do()
+			project, region, d.Id(), tref).Do()
 		if err != nil {
 			return fmt.Errorf("Error updating backup_pool: %s", err)
 		}
 
-		op, err = waitOp(config, op, "TargetPool", "updating backup_pool")
+		err = computeOperationWaitRegion(config, op, project, region, "Updating Target Pool")
 		if err != nil {
 			return err
 		}
-		if op.Error != nil {
-			return OperationError(*op.Error)
-		}
-
 		d.SetPartial("backup_pool")
 	}
 
@@ -360,45 +355,91 @@ func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) e
 	return resourceComputeTargetPoolRead(d, meta)
 }
 
+func convertInstancesFromUrls(urls []string) []string {
+	result := make([]string, 0, len(urls))
+	for _, url := range urls {
+		urlArray := strings.Split(url, "/")
+		instance := fmt.Sprintf("%s/%s", urlArray[len(urlArray)-3], urlArray[len(urlArray)-1])
+		result = append(result, instance)
+	}
+	return result
+}
+
+func convertHealthChecksFromUrls(urls []string) []string {
+	result := make([]string, 0, len(urls))
+	for _, url := range urls {
+		urlArray := strings.Split(url, "/")
+		healthCheck := fmt.Sprintf("%s", urlArray[len(urlArray)-1])
+		result = append(result, healthCheck)
+	}
+	return result
+}
+
 func resourceComputeTargetPoolRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
-	tpool, err := config.clientCompute.TargetPools.Get(
-		config.Project, config.Region, d.Id()).Do()
+	region, err := getRegion(d, config)
 	if err != nil {
-		if gerr, ok := err.(*googleapi.Error); ok && gerr.Code == 404 {
-			// The resource doesn't exist anymore
-			d.SetId("")
-
-			return nil
-		}
-
-		return fmt.Errorf("Error reading TargetPool: %s", err)
+		return err
 	}
 
-	d.Set("self_link", tpool.SelfLink)
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
 
+	tpool, err := config.clientCompute.TargetPools.Get(
+		project, region, d.Id()).Do()
+	if err != nil {
+		return handleNotFoundError(err, d, fmt.Sprintf("Target Pool %q", d.Get("name").(string)))
+	}
+
+	regionUrl := strings.Split(tpool.Region, "/")
+	d.Set("self_link", tpool.SelfLink)
+	d.Set("backup_pool", tpool.BackupPool)
+	d.Set("description", tpool.Description)
+	d.Set("failover_ratio", tpool.FailoverRatio)
+	if tpool.HealthChecks != nil {
+		d.Set("health_checks", convertHealthChecksFromUrls(tpool.HealthChecks))
+	} else {
+		d.Set("health_checks", nil)
+	}
+	if tpool.Instances != nil {
+		d.Set("instances", convertInstancesFromUrls(tpool.Instances))
+	} else {
+		d.Set("instances", nil)
+	}
+	d.Set("name", tpool.Name)
+	d.Set("region", regionUrl[len(regionUrl)-1])
+	d.Set("session_affinity", tpool.SessionAffinity)
+	d.Set("project", project)
 	return nil
 }
 
 func resourceComputeTargetPoolDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
+	region, err := getRegion(d, config)
+	if err != nil {
+		return err
+	}
+
+	project, err := getProject(d, config)
+	if err != nil {
+		return err
+	}
+
 	// Delete the TargetPool
 	op, err := config.clientCompute.TargetPools.Delete(
-		config.Project, config.Region, d.Id()).Do()
+		project, region, d.Id()).Do()
 	if err != nil {
 		return fmt.Errorf("Error deleting TargetPool: %s", err)
 	}
 
-	op, err = waitOp(config, op, "TargetPool", "delete")
+	err = computeOperationWaitRegion(config, op, project, region, "Deleting Target Pool")
 	if err != nil {
 		return err
 	}
-	if op.Error != nil {
-		return OperationError(*op.Error)
-	}
-
 	d.SetId("")
 	return nil
 }

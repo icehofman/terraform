@@ -21,19 +21,17 @@ func TestAccCloudStackEgressFirewall_basic(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackEgressFirewallRulesExist("cloudstack_egress_firewall.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "network", CLOUDSTACK_NETWORK_1),
+						"cloudstack_egress_firewall.foo", "network_id", CLOUDSTACK_NETWORK_1),
+					resource.TestCheckResourceAttr(
+						"cloudstack_egress_firewall.foo", "rule.#", "1"),
 					resource.TestCheckResourceAttr(
 						"cloudstack_egress_firewall.foo",
-						"rule.411689741.source_cidr",
-						CLOUDSTACK_NETWORK_1_IPADDRESS+"/32"),
+						"rule.2905891128.cidr_list.3378711023",
+						CLOUDSTACK_NETWORK_1_IPADDRESS1+"/32"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.protocol", "tcp"),
+						"cloudstack_egress_firewall.foo", "rule.2905891128.protocol", "tcp"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.#", "2"),
-					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.1209010669", "1000-2000"),
-					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.1889509032", "80"),
+						"cloudstack_egress_firewall.foo", "rule.2905891128.ports.32925333", "8080"),
 				),
 			},
 		},
@@ -51,21 +49,17 @@ func TestAccCloudStackEgressFirewall_update(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackEgressFirewallRulesExist("cloudstack_egress_firewall.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "network", CLOUDSTACK_NETWORK_1),
+						"cloudstack_egress_firewall.foo", "network_id", CLOUDSTACK_NETWORK_1),
 					resource.TestCheckResourceAttr(
 						"cloudstack_egress_firewall.foo", "rule.#", "1"),
 					resource.TestCheckResourceAttr(
 						"cloudstack_egress_firewall.foo",
-						"rule.411689741.source_cidr",
-						CLOUDSTACK_NETWORK_1_IPADDRESS+"/32"),
+						"rule.2905891128.cidr_list.3378711023",
+						CLOUDSTACK_NETWORK_1_IPADDRESS1+"/32"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.protocol", "tcp"),
+						"cloudstack_egress_firewall.foo", "rule.2905891128.protocol", "tcp"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.#", "2"),
-					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.1209010669", "1000-2000"),
-					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.1889509032", "80"),
+						"cloudstack_egress_firewall.foo", "rule.2905891128.ports.32925333", "8080"),
 				),
 			},
 
@@ -74,31 +68,29 @@ func TestAccCloudStackEgressFirewall_update(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackEgressFirewallRulesExist("cloudstack_egress_firewall.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "network", CLOUDSTACK_NETWORK_1),
+						"cloudstack_egress_firewall.foo", "network_id", CLOUDSTACK_NETWORK_1),
 					resource.TestCheckResourceAttr(
 						"cloudstack_egress_firewall.foo", "rule.#", "2"),
 					resource.TestCheckResourceAttr(
 						"cloudstack_egress_firewall.foo",
-						"rule.411689741.source_cidr",
-						CLOUDSTACK_NETWORK_1_IPADDRESS+"/32"),
-					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.protocol", "tcp"),
-					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.#", "2"),
-					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.1209010669", "1000-2000"),
-					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.411689741.ports.1889509032", "80"),
+						"rule.3593527682.cidr_list.1910468234",
+						CLOUDSTACK_NETWORK_1_IPADDRESS2+"/32"),
 					resource.TestCheckResourceAttr(
 						"cloudstack_egress_firewall.foo",
-						"rule.845479598.source_cidr",
-						CLOUDSTACK_NETWORK_1_IPADDRESS+"/32"),
+						"rule.3593527682.cidr_list.3378711023",
+						CLOUDSTACK_NETWORK_1_IPADDRESS1+"/32"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.845479598.protocol", "tcp"),
+						"cloudstack_egress_firewall.foo", "rule.3593527682.protocol", "tcp"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.845479598.ports.#", "1"),
+						"cloudstack_egress_firewall.foo", "rule.3593527682.ports.32925333", "8080"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_egress_firewall.foo", "rule.845479598.ports.3638101695", "443"),
+						"cloudstack_egress_firewall.foo",
+						"rule.739924765.cidr_list.3378711023",
+						CLOUDSTACK_NETWORK_1_IPADDRESS1+"/32"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_egress_firewall.foo", "rule.739924765.protocol", "tcp"),
+					resource.TestCheckResourceAttr(
+						"cloudstack_egress_firewall.foo", "rule.739924765.ports.1889509032", "80"),
 				),
 			},
 		},
@@ -116,13 +108,13 @@ func testAccCheckCloudStackEgressFirewallRulesExist(n string) resource.TestCheck
 			return fmt.Errorf("No firewall ID is set")
 		}
 
-		for k, uuid := range rs.Primary.Attributes {
-			if !strings.Contains(k, ".uuids.") || strings.HasSuffix(k, ".uuids.#") {
+		for k, id := range rs.Primary.Attributes {
+			if !strings.Contains(k, ".uuids.") || strings.HasSuffix(k, ".uuids.%") {
 				continue
 			}
 
 			cs := testAccProvider.Meta().(*cloudstack.CloudStackClient)
-			_, count, err := cs.Firewall.GetEgressFirewallRuleByID(uuid)
+			_, count, err := cs.Firewall.GetEgressFirewallRuleByID(id)
 
 			if err != nil {
 				return err
@@ -149,16 +141,14 @@ func testAccCheckCloudStackEgressFirewallDestroy(s *terraform.State) error {
 			return fmt.Errorf("No instance ID is set")
 		}
 
-		for k, uuid := range rs.Primary.Attributes {
-			if !strings.Contains(k, ".uuids.") || strings.HasSuffix(k, ".uuids.#") {
+		for k, id := range rs.Primary.Attributes {
+			if !strings.Contains(k, ".uuids.") || strings.HasSuffix(k, ".uuids.%") {
 				continue
 			}
 
-			p := cs.Firewall.NewDeleteEgressFirewallRuleParams(uuid)
-			_, err := cs.Firewall.DeleteEgressFirewallRule(p)
-
-			if err != nil {
-				return err
+			_, _, err := cs.Firewall.GetEgressFirewallRuleByID(id)
+			if err == nil {
+				return fmt.Errorf("Egress rule %s still exists", rs.Primary.ID)
 			}
 		}
 	}
@@ -168,33 +158,34 @@ func testAccCheckCloudStackEgressFirewallDestroy(s *terraform.State) error {
 
 var testAccCloudStackEgressFirewall_basic = fmt.Sprintf(`
 resource "cloudstack_egress_firewall" "foo" {
-  network = "%s"
+  network_id = "%s"
 
   rule {
-    source_cidr = "%s/32"
+    cidr_list = ["%s/32"]
     protocol = "tcp"
-    ports = ["80", "1000-2000"]
+    ports = ["8080"]
   }
 }`,
 	CLOUDSTACK_NETWORK_1,
-	CLOUDSTACK_NETWORK_1_IPADDRESS)
+	CLOUDSTACK_NETWORK_1_IPADDRESS1)
 
 var testAccCloudStackEgressFirewall_update = fmt.Sprintf(`
 resource "cloudstack_egress_firewall" "foo" {
-  network = "%s"
+  network_id = "%s"
 
   rule {
-    source_cidr = "%s/32"
+    cidr_list = ["%s/32", "%s/32"]
+    protocol = "tcp"
+    ports = ["8080"]
+  }
+
+  rule {
+    cidr_list = ["%s/32"]
     protocol = "tcp"
     ports = ["80", "1000-2000"]
   }
-
-  rule {
-    source_cidr = "%s/32"
-    protocol = "tcp"
-    ports = ["443"]
-  }
 }`,
 	CLOUDSTACK_NETWORK_1,
-	CLOUDSTACK_NETWORK_1_IPADDRESS,
-	CLOUDSTACK_NETWORK_1_IPADDRESS)
+	CLOUDSTACK_NETWORK_1_IPADDRESS1,
+	CLOUDSTACK_NETWORK_1_IPADDRESS2,
+	CLOUDSTACK_NETWORK_1_IPADDRESS1)

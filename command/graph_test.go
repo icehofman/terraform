@@ -10,6 +10,9 @@ import (
 )
 
 func TestGraph(t *testing.T) {
+	tmp, cwd := testCwd(t)
+	defer testFixCwd(t, tmp, cwd)
+
 	ui := new(cli.MockUi)
 	c := &GraphCommand{
 		Meta: Meta{
@@ -26,7 +29,7 @@ func TestGraph(t *testing.T) {
 	}
 
 	output := ui.OutputWriter.String()
-	if !strings.Contains(output, "digraph {") {
+	if !strings.Contains(output, "provider.test") {
 		t.Fatalf("doesn't look like digraph: %s", output)
 	}
 }
@@ -73,13 +76,29 @@ func TestGraph_noArgs(t *testing.T) {
 	}
 
 	output := ui.OutputWriter.String()
-	if !strings.Contains(output, "digraph {") {
+	if !strings.Contains(output, "provider.test") {
 		t.Fatalf("doesn't look like digraph: %s", output)
 	}
 }
 
 func TestGraph_plan(t *testing.T) {
+	tmp, cwd := testCwd(t)
+	defer testFixCwd(t, tmp, cwd)
+
 	planPath := testPlanFile(t, &terraform.Plan{
+		Diff: &terraform.Diff{
+			Modules: []*terraform.ModuleDiff{
+				&terraform.ModuleDiff{
+					Path: []string{"root"},
+					Resources: map[string]*terraform.InstanceDiff{
+						"test_instance.bar": &terraform.InstanceDiff{
+							Destroy: true,
+						},
+					},
+				},
+			},
+		},
+
 		Module: testModule(t, "graph"),
 	})
 
@@ -99,7 +118,7 @@ func TestGraph_plan(t *testing.T) {
 	}
 
 	output := ui.OutputWriter.String()
-	if !strings.Contains(output, "digraph {") {
+	if !strings.Contains(output, "provider.test") {
 		t.Fatalf("doesn't look like digraph: %s", output)
 	}
 }
